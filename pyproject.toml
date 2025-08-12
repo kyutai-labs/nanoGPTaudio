@@ -1,0 +1,9 @@
+[project]
+name = "nanogpt-audio"
+version = "0.1.0"
+description = "Applying nanoGPT to audio data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy<2.3",
+]

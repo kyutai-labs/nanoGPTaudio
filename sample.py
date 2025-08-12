@@ -4,9 +4,11 @@ Sample from a trained model
 import os
 import pickle
 from contextlib import nullcontext
-import torch
+
 import tiktoken
-from model import GPTConfig, GPT
+import torch
+
+from model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -54,6 +56,7 @@ if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
 # look for the meta pickle in case it is available in the dataset folder
+modality = "text"
 load_meta = False
 if init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']: # older checkpoints might not have these...
     meta_path = os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
@@ -63,9 +66,28 @@ if load_meta:
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     # TODO want to make this more general to arbitrary encoder/decoder schemes
-    stoi, itos = meta['stoi'], meta['itos']
-    encode = lambda s: [stoi[c] for c in s]
-    decode = lambda l: ''.join([itos[i] for i in l])
+    modality = meta.get("modality", "text")
+
+    if modality == "text":
+        stoi, itos = meta["stoi"], meta["itos"]
+        encode = lambda s: [stoi[c] for c in s]
+        decode = lambda l: "".join([itos[i] for i in l])
+    elif modality == "audio":
+        import librosa
+
+        assert meta["encoding"] == "mu-law-256", (
+            "Only mu-law encoding is supported for audio."
+        )
+        # Prompt with a single sample
+        encode = lambda s: [128]
+
+        def decode(l):
+            # decode mu-law encoded audio
+            audio = librosa.mu_expand(l.cpu().numpy() - 128, mu=255)
+            return audio
+
+    else:
+        raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 else:
     # ok let's assume gpt-2 encodings by default
     print("No meta.pkl found, assuming GPT-2 encodings...")
@@ -84,6 +106,16 @@ x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 with torch.no_grad():
     with ctx:
         for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
-            print('---------------')
+            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, progress_bar=True)
+            if modality == "text":
+                print(decode(y[0].tolist()))
+                print("---------------")
+            elif modality == "audio":
+                audio = decode(y[0])
+                import soundfile as sf
+
+                sf.write(f"sample_{k}.wav", audio, meta["sample_rate"])
+            else:
+                raise ValueError(
+                    f"Unknown modality: {modality}. Expected 'text' or 'audio'."
+                )
