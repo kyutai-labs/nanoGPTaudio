@@ -7,3 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy<2.3",
 ]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
