@@ -1,4 +1,4 @@
-out_dir = 'out-expresso-small'
+out_dir = 'out-expresso-small-block-size-2048'
 eval_interval = 250 # keep frequent because we'll overfit
 eval_iters = 200
 log_interval = 50 # don't print too too often
@@ -8,12 +8,12 @@ always_save_checkpoint = False
 
 wandb_log = True # override via command line if you like
 wandb_project = 'vaclav-nanogpt-audio'
-wandb_run_name = 'expresso-small'
+wandb_run_name = 'expresso-small-block-size-2048'
 
 dataset = 'expresso'
 gradient_accumulation_steps = 8
 batch_size = 32
-block_size = 16384 # context size
+block_size = 2048 # context size
 
 # baby GPT model :)
 n_layer = 6
