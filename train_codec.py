@@ -1,3 +1,4 @@
+import dataclasses
 import math
 import os
 import pickle
@@ -6,6 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime
 
 import librosa
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from einops import rearrange
@@ -20,6 +22,7 @@ eval_interval = 2000
 log_interval = 100
 eval_iters = 200
 audio_sample_iters = 3
+always_save_checkpoint = False  # if True, always save a checkpoint after each eval
 
 # wandb logging
 wandb_log = True  # disabled by default
@@ -28,13 +31,14 @@ wandb_run_name = out_dir
 
 # data
 dataset = "expresso"
-batch_size = 64
-block_size = 2 ** (14)  # 2**14 is roughly 1s of audio
+batch_size = 128
+block_size = 2 ** (14 + 2)  # 2**14 is roughly 1s of audio
 sample_rate = 16000
 
 # model
 channels = 32
 n_blocks = 7
+spectral_loss_weight = 0.0
 
 # adamw optimizer
 learning_rate = 3e-4  # Jukebox: 3e-4
@@ -102,6 +106,11 @@ meta_dtype = meta.get("dtype", "uint16")
 print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 
+def mu_expand(x: torch.Tensor, mu=255.0):
+    x = x * 2.0 / (1 + mu)
+    return torch.sign(x) / mu * (torch.pow(1 + mu, torch.abs(x)) - 1)
+
+
 # poor man's data loader
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
@@ -113,31 +122,27 @@ def get_batch(split):
     )
 
     ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack(
-        [
-            torch.from_numpy(
-                (
-                    librosa.mu_expand(
-                        data[i : i + block_size].astype(np.int32) - 128, mu=255
-                    )
-                )
-            ).to(dtype=torch_dtype)
-            for i in ix
-        ]
-    )
-    x = rearrange(x, "b t -> b 1 t")
+    x = torch.stack([torch.from_numpy((data[i : i + block_size].copy())) for i in ix])
+
     if device_type == "cuda":
         # pin array x, which allows us to move it to GPU asynchronously (non_blocking=True)
         x = x.pin_memory().to(device, non_blocking=True)
     else:
         x = x.to(device)
 
+    # Manipulate the tensor once it's on the GPU
+    x = rearrange(x, "b t -> b 1 t")
+    x = x.to(dtype=torch.int32) - 128
+    x = mu_expand(x).to(dtype=torch_dtype)
+
     return x
 
 
 # model init
 # start with model_args from command line
-codec_config = CodecConfig(channels=channels, n_blocks=n_blocks)
+codec_config = CodecConfig(
+    channels=channels, n_blocks=n_blocks, spectral_loss_weight=spectral_loss_weight
+)
 
 model: Codec = Codec(codec_config)
 model.to(device)
@@ -253,9 +258,28 @@ while True:
                     "val/loss": losses["val"],
                     "lr": lr,
                     "audio": [a["audio"] for a in wandb_audios],
-                    "spectrogram": [wandb.Image(a["spectrogram"]) for a in wandb_audios],
+                    "spectrogram": [
+                        wandb.Image(a["spectrogram"]) for a in wandb_audios
+                    ],
                 }
             )
+            # Close the figures to free memory
+            for a in wandb_audios:
+                plt.close(a["spectrogram"])
+
+        if losses["val"] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses["val"]
+            if iter_num > 0:
+                checkpoint = {
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "model_args": dataclasses.asdict(codec_config),
+                    "iter_num": iter_num,
+                    "best_val_loss": best_val_loss,
+                    "config": config,
+                }
+                print(f"saving checkpoint to {out_dir}")
+                torch.save(checkpoint, os.path.join(out_dir, "codec_ckpt.pt"))
 
     with ctx:
         reconstructed, loss = model(x)
