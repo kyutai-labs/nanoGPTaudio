@@ -1,12 +1,17 @@
 """
 Sample from a trained model
 """
+from datetime import datetime
 import os
+from pathlib import Path
 import pickle
 from contextlib import nullcontext
+from typing import Literal
 
+import numpy as np
 import tiktoken
 import torch
+import librosa
 
 from model import GPT, GPTConfig
 
@@ -31,7 +36,8 @@ torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+
+model: GPT
 
 # model
 if init_from == 'resume':
@@ -49,6 +55,8 @@ if init_from == 'resume':
 elif init_from.startswith('gpt2'):
     # init from a given GPT-2 model
     model = GPT.from_pretrained(init_from, dict(dropout=0.0))
+else:
+    raise ValueError(f"Unknown init_from value: {init_from}. Expected 'resume' or 'gpt2-<size>'.")
 
 model.eval()
 model.to(device)
@@ -56,7 +64,7 @@ if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
 # look for the meta pickle in case it is available in the dataset folder
-modality = "text"
+modality: Literal["text", "audio"] = "text"
 load_meta = False
 if init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']: # older checkpoints might not have these...
     meta_path = os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
@@ -73,17 +81,15 @@ if load_meta:
         encode = lambda s: [stoi[c] for c in s]
         decode = lambda l: "".join([itos[i] for i in l])
     elif modality == "audio":
-        import librosa
-
         assert meta["encoding"] == "mu-law-256", (
             "Only mu-law encoding is supported for audio."
         )
-        # Prompt with a single sample
-        encode = lambda s: [128]
+        def encode(audio):
+            return (librosa.mu_compress(audio, mu=255) + 128)
 
-        def decode(l):
+        def decode(tokens):
             # decode mu-law encoded audio
-            audio = librosa.mu_expand(l.cpu().numpy() - 128, mu=255)
+            audio = librosa.mu_expand(tokens.cpu().numpy() - 128, mu=255)
             return audio
 
     else:
@@ -97,25 +103,34 @@ else:
 
 # encode the beginning of the prompt
 if start.startswith('FILE:'):
-    with open(start[5:], 'r', encoding='utf-8') as f:
-        start = f.read()
+    if modality == "text":
+        with open(start[len('FILE:'):], 'r', encoding='utf-8') as f:
+            start = f.read()
+    elif modality == "audio":
+        # Read audio file using librosa
+        start, _ = librosa.load(start[len('FILE:'):], sr=meta["sample_rate"])
+else:
+    if start == "\n":
+        start = np.array([0.])
+
 start_ids = encode(start)
-x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+x = torch.tensor(start_ids, dtype=torch.long, device=device)
+x = x.repeat(num_samples, 1)
+
+samples_dir = Path(out_dir) / "samples"
+file_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # run generation
 with torch.no_grad():
+    ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     with ctx:
+        y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, progress_bar=True)
         for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, progress_bar=True)
             if modality == "text":
-                print(decode(y[0].tolist()))
+                print(decode(y[k].tolist()))
                 print("---------------")
             elif modality == "audio":
-                audio = decode(y[0])
+                audio = decode(y[k])
                 import soundfile as sf
 
-                sf.write(f"sample_{k}.wav", audio, meta["sample_rate"])
-            else:
-                raise ValueError(
-                    f"Unknown modality: {modality}. Expected 'text' or 'audio'."
-                )
+                sf.write(samples_dir / f"{file_prefix}_{k}.wav", audio, meta["sample_rate"])
