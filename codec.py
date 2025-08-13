@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+import torchaudio
 from torch.nn import functional as F
 
 
@@ -16,25 +17,26 @@ class ResidualBlock(nn.Module):
         self.channels = channels
         self.dilation = dilation
 
-        self.dilated_conv = nn.Conv1d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=3,
-            dilation=dilation,
-            padding=dilation,
-        )
-        self.regular_conv = nn.Conv1d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=3,
-            padding=1,
+        self.model = nn.Sequential(
+            nn.ReLU(),
+            nn.Conv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=3,
+                dilation=dilation,
+                padding=dilation,
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=3,
+                padding=1,
+            ),
         )
 
     def forward(self, x: torch.Tensor):
-        """Note that the residual pathway is not built into forward()."""
-        to_add = self.dilated_conv(x)
-        to_add = self.regular_conv(to_add)
-        return to_add
+        return x + self.model(x)
 
 
 class EncoderBlock(nn.Module):
@@ -66,7 +68,7 @@ class EncoderBlock(nn.Module):
     def forward(self, x: torch.Tensor):
         x = self.downsampling_conv(x)
         for i in range(self.n_residual_blocks):
-            x = x + self.residual_blocks[i](x)
+            x = self.residual_blocks[i](x)
 
         return x
 
@@ -75,6 +77,9 @@ class Encoder(nn.Module):
     def __init__(self, channels: int, n_blocks: int):
         super().__init__()
         self.channels = channels
+        # Jukebox actually uses different widths for the EncoderBlock and adds a conv
+        # at the end to get to an output embedding width, see
+        # https://github.com/openai/jukebox/blob/master/jukebox/vqvae/encdec.py
         self.blocks = nn.ModuleList(
             [
                 EncoderBlock(
@@ -150,11 +155,38 @@ class Decoder(nn.Module):
         return x
 
 
+class MultiscaleSpectrogramLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.spectrograms = nn.ModuleList(
+            [
+                torchaudio.transforms.Spectrogram(
+                    n_fft=2048, hop_length=240, win_length=1200, power=1
+                ),
+                torchaudio.transforms.Spectrogram(
+                    n_fft=1024, hop_length=120, win_length=600, power=1
+                ),
+                torchaudio.transforms.Spectrogram(
+                    n_fft=512, hop_length=50, win_length=240, power=1
+                ),
+            ]
+        )
+
+    def forward(self, audio: torch.Tensor, reconstructed: torch.Tensor):
+        losses = []
+        for spec in self.spectrograms:
+            spec = spec.to(audio.device)
+            diff = spec(audio) - spec(reconstructed)
+            losses.append(torch.sqrt(torch.mean(diff**2)))
+        return torch.mean(torch.stack(losses))
+
+
 @dataclass
 class CodecConfig:
     # Both in the encoder and decoder so that the downsampling/upsamling matches
     n_blocks: int
     channels: int
+    spectral_loss_weight: float
 
 
 class Codec(nn.Module):
@@ -164,14 +196,19 @@ class Codec(nn.Module):
 
         self.encoder = Encoder(channels=config.channels, n_blocks=config.n_blocks)
         self.decoder = Decoder(channels=config.channels, n_blocks=config.n_blocks)
+        self.multiscale_spectrogram_loss = MultiscaleSpectrogramLoss()
 
     def forward(self, audio):
         z = self.encoder(audio)
         reconstructed = self.decoder(z)
 
-        loss_l2 = F.mse_loss(reconstructed, audio)
+        loss = F.mse_loss(reconstructed, audio)
 
-        return reconstructed, loss_l2
+        if self.config.spectral_loss_weight > 0:
+            loss_spectral = self.multiscale_spectrogram_loss(audio, reconstructed)
+            loss += self.config.spectral_loss_weight * loss_spectral
+
+        return reconstructed, loss
 
     def configure_optimizers(self, weight_decay, learning_rate, device_type):
         optimizer = torch.optim.AdamW(
