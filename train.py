@@ -16,18 +16,18 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
-import os
-import time
 import math
+import os
 import pickle
+import time
 from contextlib import nullcontext
 
 import numpy as np
 import torch
+from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 
-from model import GPTConfig, GPT
+from model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -147,12 +147,12 @@ if os.path.exists(meta_path):
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == "train":
-        data = np.memmap(
-            os.path.join(data_dir, "train.bin"), dtype=meta_dtype, mode="r"
-        )
-    else:
-        data = np.memmap(os.path.join(data_dir, "val.bin"), dtype=meta_dtype, mode="r")
+    data = np.memmap(
+        os.path.join(data_dir, "train.bin" if split == "train" else "val.bin"),
+        dtype=meta_dtype,
+        mode="r",
+    )
+
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack(
         [torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix]

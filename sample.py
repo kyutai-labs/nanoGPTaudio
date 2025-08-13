@@ -153,6 +153,7 @@ with torch.no_grad():
         y = model.generate(
             x, max_new_tokens, temperature=temperature, top_k=top_k, progress_bar=True
         )
+        samples_dir.mkdir(parents=True, exist_ok=True)
         for k in range(num_samples):
             if modality == "text":
                 print(decode(y[k].tolist()))

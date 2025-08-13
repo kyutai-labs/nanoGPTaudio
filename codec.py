@@ -3,6 +3,8 @@ Based on a single level VQ-VAE from Jukebox:
 https://arxiv.org/abs/2005.00341
 """
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -73,14 +75,16 @@ class Encoder(nn.Module):
     def __init__(self, channels: int, n_blocks: int):
         super().__init__()
         self.channels = channels
-        self.blocks = [
-            EncoderBlock(
-                in_channels=1 if i == 0 else channels,
-                out_channels=channels,
-                n_residual_blocks=4,
-            )
-            for i in range(n_blocks)
-        ]
+        self.blocks = nn.ModuleList(
+            [
+                EncoderBlock(
+                    in_channels=1 if i == 0 else channels,
+                    out_channels=channels,
+                    n_residual_blocks=4,
+                )
+                for i in range(n_blocks)
+            ]
+        )
 
     def forward(self, x):
         for block in self.blocks:
@@ -129,16 +133,51 @@ class Decoder(nn.Module):
     def __init__(self, channels: int, n_blocks: int):
         super().__init__()
         self.channels = channels
-        self.blocks = [
-            DecoderBlock(
-                in_channels=channels,
-                out_channels=1 if i == n_blocks - 1 else channels,
-                n_residual_blocks=4,
-            )
-            for i in range(n_blocks)
-        ]
+        self.blocks = nn.ModuleList(
+            [
+                DecoderBlock(
+                    in_channels=channels,
+                    out_channels=1 if i == n_blocks - 1 else channels,
+                    n_residual_blocks=4,
+                )
+                for i in range(n_blocks)
+            ]
+        )
 
     def forward(self, x):
         for block in self.blocks:
             x = block(x)
         return x
+
+
+@dataclass
+class CodecConfig:
+    # Both in the encoder and decoder so that the downsampling/upsamling matches
+    n_blocks: int
+    channels: int
+
+
+class Codec(nn.Module):
+    def __init__(self, config: CodecConfig):
+        super().__init__()
+        self.config = config
+
+        self.encoder = Encoder(channels=config.channels, n_blocks=config.n_blocks)
+        self.decoder = Decoder(channels=config.channels, n_blocks=config.n_blocks)
+
+    def forward(self, audio):
+        z = self.encoder(audio)
+        reconstructed = self.decoder(z)
+
+        loss_l2 = F.mse_loss(reconstructed, audio)
+
+        return reconstructed, loss_l2
+
+    def configure_optimizers(self, weight_decay, learning_rate, device_type):
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            fused=device_type == "cuda",
+        )
+        return optimizer
