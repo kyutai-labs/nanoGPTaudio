@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torchaudio
+from einops import repeat
 from torch.nn import functional as F
 
 
@@ -153,6 +154,75 @@ class Decoder(nn.Module):
         for block in self.blocks:
             x = block(x)
         return x
+
+
+def exponential_moving_average_update(
+    old: torch.Tensor, new: torch.Tensor, update_speed: float
+):
+    old.mul_(1 - update_speed).add_(new * update_speed)
+
+
+class Bottleneck(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        codebook_size: int,
+        codebook_update_speed: float = 0.01,
+    ):
+        super().__init__()
+        self.channels = channels
+        self.codebook_size = codebook_size
+        self.codebook_update_speed = codebook_update_speed
+
+        self.code_usage: torch.Tensor
+        self.register_buffer("code_usage", torch.ones(codebook_size))
+        self.code_embedding_sum: torch.Tensor
+        self.register_buffer(
+            "code_embedding_sum",
+            torch.nn.init.kaiming_uniform_(torch.empty(codebook_size, channels)),
+        )
+
+    def codebook(self) -> torch.Tensor:
+        """Compute the codebook from the moving average statistics."""
+        return self.code_embedding_sum / self.code_usage.clamp(min=1e-5)[:, None]
+
+    def encode(self, embeddings: torch.Tensor):
+        """Return the code indices"""
+        # shape [codebook_size, batch size]
+        distances = torch.cdist(self.codebook(), embeddings)
+        codes = torch.argmin(distances, dim=0)
+        return codes
+
+    def decode(self, codes: torch.Tensor):
+        quantized = self.codebook()[codes]
+
+        # return embeddings + (quantized - embeddings).detach()
+        return quantized
+
+    def forward(self, embeddings: torch.Tensor):
+        codes = self.encode(embeddings)
+        quantized = self.decode(codes)
+
+        commitment_loss = F.mse_loss(quantized.detach(), embeddings)
+
+        if self.training:
+            cur_code_usage = torch.zeros(self.codebook_size).scatter_add(
+                0, codes, torch.ones_like(codes, dtype=self.code_usage.dtype)
+            )
+            exponential_moving_average_update(
+                self.code_usage, cur_code_usage, self.codebook_update_speed
+            )
+
+            cur_code_embedding_sum = torch.zeros(
+                self.codebook_size, self.channels
+            ).scatter_add(0, repeat(codes, "n -> n d", d=self.channels), embeddings)
+            exponential_moving_average_update(
+                self.code_embedding_sum,
+                cur_code_embedding_sum,
+                self.codebook_update_speed,
+            )
+
+        return quantized, commitment_loss
 
 
 class MultiscaleSpectrogramLoss(nn.Module):
