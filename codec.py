@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torchaudio
-from einops import repeat
+from einops import rearrange, repeat
 from torch.nn import functional as F
 
 
@@ -186,43 +186,52 @@ class Bottleneck(nn.Module):
         """Compute the codebook from the moving average statistics."""
         return self.code_embedding_sum / self.code_usage.clamp(min=1e-5)[:, None]
 
-    def encode(self, embeddings: torch.Tensor):
-        """Return the code indices"""
-        # shape [codebook_size, batch size]
-        distances = torch.cdist(self.codebook(), embeddings)
-        codes = torch.argmin(distances, dim=0)
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the code indices for `x` of shape [batch, channels]."""
+        assert x.dim() == 2
+        distances = torch.cdist(self.codebook(), x)
+        codes = distances.argmin(dim=0)
         return codes
 
     def decode(self, codes: torch.Tensor):
-        quantized = self.codebook()[codes]
-
-        # return embeddings + (quantized - embeddings).detach()
+        quantized = F.embedding(codes, self.codebook())
         return quantized
 
     def forward(self, embeddings: torch.Tensor):
+        assert embeddings.dim() == 2, (
+            f"Expected shape [batch, channels], got {embeddings.shape=}"
+        )
+
         codes = self.encode(embeddings)
         quantized = self.decode(codes)
+
+        # Straight-through estimator: we pretend like we didn't quantize the embeddings.
+        # We do this by treating quantization as the addition of a constant vector
+        # TODO: why doesn't this work with torch.compile()?
+        #   Getting "Trying to backward through the graph a second time" error
+        quantized = embeddings + (quantized - embeddings).detach()
 
         commitment_loss = F.mse_loss(quantized.detach(), embeddings)
 
         if self.training:
-            cur_code_usage = torch.zeros(self.codebook_size).scatter_add(
+            cur_code_usage = torch.zeros_like(self.code_usage).scatter_add(
                 0, codes, torch.ones_like(codes, dtype=self.code_usage.dtype)
             )
             exponential_moving_average_update(
                 self.code_usage, cur_code_usage, self.codebook_update_speed
             )
 
-            cur_code_embedding_sum = torch.zeros(
-                self.codebook_size, self.channels
+            cur_code_embedding_sum = torch.zeros_like(
+                self.code_embedding_sum
             ).scatter_add(0, repeat(codes, "n -> n d", d=self.channels), embeddings)
+
             exponential_moving_average_update(
                 self.code_embedding_sum,
                 cur_code_embedding_sum,
                 self.codebook_update_speed,
             )
 
-        return quantized, commitment_loss
+        return codes, quantized, commitment_loss
 
 
 class MultiscaleSpectrogramLoss(nn.Module):
@@ -256,7 +265,9 @@ class CodecConfig:
     # Both in the encoder and decoder so that the downsampling/upsamling matches
     n_blocks: int
     channels: int
+    codebook_size: int
     spectral_loss_weight: float
+    commitment_loss_weight: float
 
 
 class Codec(nn.Module):
@@ -266,13 +277,27 @@ class Codec(nn.Module):
 
         self.encoder = Encoder(channels=config.channels, n_blocks=config.n_blocks)
         self.decoder = Decoder(channels=config.channels, n_blocks=config.n_blocks)
+        self.bottleneck = Bottleneck(
+            channels=config.channels, codebook_size=config.codebook_size
+        )
         self.multiscale_spectrogram_loss = MultiscaleSpectrogramLoss()
 
     def forward(self, audio):
-        z = self.encoder(audio)
-        reconstructed = self.decoder(z)
+        embeddings = self.encoder(audio)
+
+        flat_embeddings = rearrange(embeddings, "b c t -> (b t) c")
+
+        _codes_flat, flat_embeddings_q, commitment_loss = self.bottleneck(
+            flat_embeddings
+        )
+        embeddings_q = rearrange(
+            flat_embeddings_q, "(b t) c -> b c t", b=audio.shape[0]
+        )
+
+        reconstructed = self.decoder(embeddings_q)
 
         loss = F.mse_loss(reconstructed, audio)
+        loss += commitment_loss * self.config.commitment_loss_weight
 
         if self.config.spectral_loss_weight > 0:
             loss_spectral = self.multiscale_spectrogram_loss(audio, reconstructed)

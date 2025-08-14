@@ -17,7 +17,7 @@ from codec import Codec, CodecConfig
 
 # -----------------------------------------------------------------------------
 # I/O
-out_dir = "codec_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+out_dir = "models/codec_" + datetime.now().strftime("%m%d_%H%M%S")
 eval_interval = 2000
 log_interval = 100
 eval_iters = 200
@@ -27,7 +27,7 @@ always_save_checkpoint = False  # if True, always save a checkpoint after each e
 # wandb logging
 wandb_log = True  # disabled by default
 wandb_project = "vaclav-nanogpt-audio-codec"
-wandb_run_name = out_dir
+wandb_run_name = out_dir.split("/")[-1]
 
 # data
 dataset = "expresso"
@@ -38,7 +38,9 @@ sample_rate = 16000
 # model
 channels = 32
 n_blocks = 7
-spectral_loss_weight = 0.0
+spectral_loss_weight = 1.0
+codebook_size = 2048
+commitment_loss_weight = 0.02
 
 # adamw optimizer
 learning_rate = 3e-4  # Jukebox: 3e-4
@@ -70,10 +72,6 @@ config_keys = [
 exec(open("configurator.py").read())  # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 
-if out_dir == "out_default":
-    raise ValueError("Please override out_dir")
-
-os.makedirs(out_dir, exist_ok=True)
 
 torch.manual_seed(1337)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
@@ -141,7 +139,11 @@ def get_batch(split):
 # model init
 # start with model_args from command line
 codec_config = CodecConfig(
-    channels=channels, n_blocks=n_blocks, spectral_loss_weight=spectral_loss_weight
+    n_blocks=n_blocks,
+    channels=channels,
+    codebook_size=codebook_size,
+    spectral_loss_weight=spectral_loss_weight,
+    commitment_loss_weight=commitment_loss_weight,
 )
 
 model: Codec = Codec(codec_config)
@@ -279,7 +281,9 @@ while True:
                     "config": config,
                 }
                 print(f"saving checkpoint to {out_dir}")
+                os.makedirs(out_dir, exist_ok=True)
                 torch.save(checkpoint, os.path.join(out_dir, "codec_ckpt.pt"))
+                wandb.save(os.path.join(out_dir, "codec_ckpt.pt"))
 
     with ctx:
         reconstructed, loss = model(x)
