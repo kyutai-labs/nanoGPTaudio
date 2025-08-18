@@ -165,17 +165,18 @@ if compile:
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
-def estimate_loss():
-    losses = {}
+def get_metrics():
+    losses_flat = {}
     audios = None
     model.eval()
     for split in ["train", "val"]:
-        split_losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             x = get_batch(split)
             with ctx:
-                reconstructed, loss = model(x)
-            split_losses[k] = loss.item()
+                reconstructed, cur_losses = model(x)
+
+            for name, loss in cur_losses.items():
+                losses_flat[f"{split}/{name}_loss"] = loss.item()
 
             if k == 0:
                 audios = rearrange(
@@ -183,11 +184,14 @@ def estimate_loss():
                 )
                 audios = audios[:audio_sample_iters, :]
 
-        losses[split] = split_losses.mean()
     model.train()
 
+    metrics = {name: float(np.mean(losses)) for name, losses in losses_flat.items()}
+    metrics["codebook_entropy"] = model.bottleneck.get_codebook_entropy()
+    metrics["fraction_unused_codes"] = model.bottleneck.get_fraction_unused_codes()
+
     assert audios is not None
-    return losses, audios
+    return metrics, audios
 
 
 # learning rate decay scheduler (cosine with warmup)
@@ -237,10 +241,9 @@ while True:
         param_group["lr"] = lr
 
     if iter_num % eval_interval == 0:
-        losses, audios = estimate_loss()
-        print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-        )
+        metrics, audios = get_metrics()
+
+        print(f"step {iter_num}: {metrics}")
         if wandb_log:
             wandb_audios = [
                 {
@@ -255,9 +258,8 @@ while True:
 
             wandb.log(
                 {
+                    **metrics,
                     "iter": iter_num,
-                    "train/loss": losses["train"],
-                    "val/loss": losses["val"],
                     "lr": lr,
                     "audio": [a["audio"] for a in wandb_audios],
                     "spectrogram": [
@@ -269,8 +271,8 @@ while True:
             for a in wandb_audios:
                 plt.close(a["spectrogram"])
 
-        if losses["val"] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses["val"]
+        if metrics["val/total_loss"] < best_val_loss or always_save_checkpoint:
+            best_val_loss = metrics["val/total_loss"]
             if iter_num > 0:
                 checkpoint = {
                     "model": model.state_dict(),
@@ -286,11 +288,11 @@ while True:
                 wandb.save(os.path.join(out_dir, "codec_ckpt.pt"))
 
     with ctx:
-        reconstructed, loss = model(x)
+        reconstructed, losses = model(x)
     # immediately async prefetch next batch while model is doing the forward pass on the GPU
     x = get_batch("train")
     # backward pass, with gradient scaling if training in fp16
-    scaler.scale(loss).backward()
+    scaler.scale(losses["total"]).backward()
 
     # clip the gradient
     if grad_clip != 0.0:
@@ -308,7 +310,7 @@ while True:
     t0 = t1
     if iter_num % log_interval == 0:
         # get loss as float. note: this is a CPU-GPU sync point
-        lossf = loss.item()
+        lossf = losses["total"].item()
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}ms")
     iter_num += 1
 

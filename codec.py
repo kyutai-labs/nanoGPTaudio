@@ -3,6 +3,7 @@ Based on a single level VQ-VAE from Jukebox:
 https://arxiv.org/abs/2005.00341
 """
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -233,6 +234,18 @@ class Bottleneck(nn.Module):
 
         return codes, quantized, commitment_loss
 
+    def get_codebook_entropy(self):
+        """Entropy in the information theory sense, normalized to [0, 1]."""
+        proba = self.code_usage / self.code_usage.sum()
+        p_log_p = torch.where(proba == 0, 0, proba * torch.log(proba))
+        entropy = -p_log_p.sum()
+        # The maximum entropy is reached by a uniform probability distribution
+        max_possible_entropy = math.log(self.codebook_size)
+        return float(entropy / max_possible_entropy)
+
+    def get_fraction_unused_codes(self, threshold: float = 1):
+        return torch.mean((self.code_usage < threshold).float()).item()
+
 
 class MultiscaleSpectrogramLoss(nn.Module):
     def __init__(self):
@@ -296,14 +309,23 @@ class Codec(nn.Module):
 
         reconstructed = self.decoder(embeddings_q)
 
-        loss = F.mse_loss(reconstructed, audio)
-        loss += commitment_loss * self.config.commitment_loss_weight
+        losses = {}
+        losses["mse"] = F.mse_loss(reconstructed, audio)
+        losses["commitment"] = commitment_loss
 
         if self.config.spectral_loss_weight > 0:
             loss_spectral = self.multiscale_spectrogram_loss(audio, reconstructed)
-            loss += self.config.spectral_loss_weight * loss_spectral
+            losses["spectral"] = loss_spectral
+        else:
+            losses["spectral"] = 0.0
 
-        return reconstructed, loss
+        losses["total"] = (
+            losses["mse"]
+            + losses["commitment"] * self.config.commitment_loss_weight
+            + losses["spectral"] * self.config.spectral_loss_weight
+        )
+
+        return reconstructed, losses
 
     def configure_optimizers(self, weight_decay, learning_rate, device_type):
         optimizer = torch.optim.AdamW(
