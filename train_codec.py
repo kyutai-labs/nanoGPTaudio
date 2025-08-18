@@ -39,7 +39,8 @@ sample_rate = 16000
 channels = 32
 n_blocks = 7
 spectral_loss_weight = 1.0
-codebook_size = 2048
+codebook_size = 1024
+n_codebooks = 8
 commitment_loss_weight = 0.02
 
 # adamw optimizer
@@ -52,7 +53,7 @@ grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
 decay_lr = True  # whether to decay the learning rate
 warmup_iters = 2000  # how many steps to warm up for
 lr_decay_iters = 100_000  # should be ~= max_iters per Chinchilla
-min_lr = 3e-4  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+min_lr = 3e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 
 # system
 device = "cuda"
@@ -142,6 +143,7 @@ codec_config = CodecConfig(
     n_blocks=n_blocks,
     channels=channels,
     codebook_size=codebook_size,
+    n_codebooks=n_codebooks,
     spectral_loss_weight=spectral_loss_weight,
     commitment_loss_weight=commitment_loss_weight,
 )

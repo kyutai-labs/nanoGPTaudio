@@ -163,7 +163,7 @@ def exponential_moving_average_update(
     old.mul_(1 - update_speed).add_(new * update_speed)
 
 
-class Bottleneck(nn.Module):
+class VectorQuantizer(nn.Module):
     def __init__(
         self,
         channels: int,
@@ -204,15 +204,15 @@ class Bottleneck(nn.Module):
         )
 
         codes = self.encode(embeddings)
-        quantized = self.decode(codes)
+        embeddings_q = self.decode(codes)
 
         # Straight-through estimator: we pretend like we didn't quantize the embeddings.
         # We do this by treating quantization as the addition of a constant vector
         # TODO: why doesn't this work with torch.compile()?
         #   Getting "Trying to backward through the graph a second time" error
-        quantized = embeddings + (quantized - embeddings).detach()
+        embeddings_q = embeddings + (embeddings_q - embeddings).detach()
 
-        commitment_loss = F.mse_loss(quantized.detach(), embeddings)
+        commitment_loss = F.mse_loss(embeddings_q.detach(), embeddings)
 
         if self.training:
             cur_code_usage = torch.zeros_like(self.code_usage).scatter_add(
@@ -232,7 +232,7 @@ class Bottleneck(nn.Module):
                 self.codebook_update_speed,
             )
 
-        return codes, quantized, commitment_loss
+        return codes, embeddings_q, commitment_loss
 
     def get_codebook_entropy(self):
         """Entropy in the information theory sense, normalized to [0, 1]."""
@@ -245,6 +245,63 @@ class Bottleneck(nn.Module):
 
     def get_fraction_unused_codes(self, threshold: float = 1):
         return torch.mean((self.code_usage < threshold).float()).item()
+
+
+class ResidualVectorQuantizer(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        codebook_size: int,
+        n_codebooks: int,
+    ):
+        super().__init__()
+
+        self.channels = channels
+        self.codebook_size = codebook_size
+        self.n_codebooks = n_codebooks
+
+        self.bottlenecks = nn.ModuleList(
+            [
+                VectorQuantizer(
+                    channels=channels,
+                    codebook_size=codebook_size,
+                )
+                for _ in range(n_codebooks)
+            ]
+        )
+
+    def forward(self, embeddings: torch.Tensor):
+        assert embeddings.dim() == 2, (
+            f"Expected shape [batch, channels], got {embeddings.shape=}"
+        )
+
+        codes = torch.zeros(
+            embeddings.shape[0], self.n_codebooks, device=embeddings.device
+        )
+
+        embeddings_q = torch.zeros_like(embeddings)
+
+        commitment_loss = torch.scalar_tensor(0, device=embeddings.device)
+
+        for i in range(self.n_codebooks):
+            residual = embeddings - embeddings_q
+            cur_codes, cur_embeddings_q, cur_commitment_loss = self.bottlenecks[i](
+                residual
+            )
+
+            codes[:, i] = cur_codes
+            embeddings_q += cur_embeddings_q
+            commitment_loss += cur_commitment_loss
+
+        return codes, embeddings_q, commitment_loss
+
+    def get_codebook_entropy(self):
+        entropies = [b.get_codebook_entropy() for b in self.bottlenecks]
+        return sum(entropies) / len(entropies)
+
+    def get_fraction_unused_codes(self, threshold: float = 1):
+        fractions = [b.get_fraction_unused_codes() for b in self.bottlenecks]
+        return sum(fractions) / len(fractions)
 
 
 class MultiscaleSpectrogramLoss(nn.Module):
@@ -279,6 +336,7 @@ class CodecConfig:
     n_blocks: int
     channels: int
     codebook_size: int
+    n_codebooks: int
     spectral_loss_weight: float
     commitment_loss_weight: float
 
@@ -290,8 +348,10 @@ class Codec(nn.Module):
 
         self.encoder = Encoder(channels=config.channels, n_blocks=config.n_blocks)
         self.decoder = Decoder(channels=config.channels, n_blocks=config.n_blocks)
-        self.bottleneck = Bottleneck(
-            channels=config.channels, codebook_size=config.codebook_size
+        self.bottleneck = ResidualVectorQuantizer(
+            channels=config.channels,
+            codebook_size=config.codebook_size,
+            n_codebooks=config.n_codebooks,
         )
         self.multiscale_spectrogram_loss = MultiscaleSpectrogramLoss()
 
