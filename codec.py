@@ -215,22 +215,25 @@ class VectorQuantizer(nn.Module):
         commitment_loss = F.mse_loss(embeddings_q.detach(), embeddings)
 
         if self.training:
-            cur_code_usage = torch.zeros_like(self.code_usage).scatter_add(
-                0, codes, torch.ones_like(codes, dtype=self.code_usage.dtype)
-            )
-            exponential_moving_average_update(
-                self.code_usage, cur_code_usage, self.codebook_update_speed
-            )
+            # The no_grad() is needed here so that the computational graph doesn't keep
+            # growing with all the EMA updates
+            with torch.no_grad():
+                cur_code_usage = torch.zeros_like(self.code_usage).scatter_add(
+                    0, codes, torch.ones_like(codes, dtype=self.code_usage.dtype)
+                )
+                exponential_moving_average_update(
+                    self.code_usage, cur_code_usage, self.codebook_update_speed
+                )
 
-            cur_code_embedding_sum = torch.zeros_like(
-                self.code_embedding_sum
-            ).scatter_add(0, repeat(codes, "n -> n d", d=self.channels), embeddings)
+                cur_code_embedding_sum = torch.zeros_like(
+                    self.code_embedding_sum
+                ).scatter_add(0, repeat(codes, "n -> n d", d=self.channels), embeddings)
 
-            exponential_moving_average_update(
-                self.code_embedding_sum,
-                cur_code_embedding_sum,
-                self.codebook_update_speed,
-            )
+                exponential_moving_average_update(
+                    self.code_embedding_sum,
+                    cur_code_embedding_sum,
+                    self.codebook_update_speed,
+                )
 
         return codes, embeddings_q, commitment_loss
 
@@ -377,13 +380,17 @@ class Codec(nn.Module):
             loss_spectral = self.multiscale_spectrogram_loss(audio, reconstructed)
             losses["spectral"] = loss_spectral
         else:
-            losses["spectral"] = 0.0
+            losses["spectral"] = torch.Tensor(0.0, device=audio.device)
 
         losses["total"] = (
             losses["mse"]
             + losses["commitment"] * self.config.commitment_loss_weight
             + losses["spectral"] * self.config.spectral_loss_weight
         )
+        # Not sure these detach_() calls are needed
+        losses["mse"].detach_()
+        losses["commitment"].detach_()
+        losses["spectral"].detach_()
 
         return reconstructed, losses
 

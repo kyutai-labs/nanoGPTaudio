@@ -178,7 +178,10 @@ def get_metrics():
                 reconstructed, cur_losses = model(x)
 
             for name, loss in cur_losses.items():
-                losses_flat[f"{split}/{name}_loss"] = loss.item()
+                key = f"{split}/{name}_loss"
+                if key not in losses_flat:
+                    losses_flat[key] = []
+                losses_flat[key].append(loss.item())
 
             if k == 0:
                 audios = rearrange(
@@ -186,12 +189,11 @@ def get_metrics():
                 )
                 audios = audios[:audio_sample_iters, :]
 
-    model.train()
-
     metrics = {name: float(np.mean(losses)) for name, losses in losses_flat.items()}
     metrics["codebook_entropy"] = model.bottleneck.get_codebook_entropy()
     metrics["fraction_unused_codes"] = model.bottleneck.get_fraction_unused_codes()
 
+    model.train()
     assert audios is not None
     return metrics, audios
 
@@ -242,7 +244,7 @@ while True:
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
-    if iter_num % eval_interval == 0:
+    if iter_num % eval_interval == 0 and iter_num > 0:
         metrics, audios = get_metrics()
 
         print(f"step {iter_num}: {metrics}")
@@ -311,9 +313,16 @@ while True:
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0:
+        gpu_gb_used = torch.cuda.memory_allocated() / 1024**3
+
         # get loss as float. note: this is a CPU-GPU sync point
         lossf = losses["total"].item()
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}ms")
+        print(
+            f"iter {iter_num:>7}: "
+            f"loss {lossf:.2e}, "
+            f"GPU mem: {gpu_gb_used:.3f} GB, "
+            f"time {dt * 1000:.2f}ms/it"
+        )
     iter_num += 1
 
     # termination conditions
