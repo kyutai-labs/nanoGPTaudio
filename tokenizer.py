@@ -11,9 +11,18 @@ T = TypeVar("T")
 
 
 class Tokenizer(Protocol, Generic[T]):
-    def encode(self, raw: T) -> torch.Tensor: ...
+    """Something that can encode data into tokens and then back.
 
-    def decode(self, tokens: torch.Tensor) -> T: ...
+    The type that we're encoding will be str for text and np.ndarray for audio.
+    """
+
+    def encode(self, raw: T) -> torch.Tensor:
+        """Take type T and encode it into a 1D int tensor of tokens."""
+        ...
+
+    def decode(self, tokens: torch.Tensor) -> T:
+        """Take a 1D int tensor of tokens and decode it into type T."""
+        ...
 
 
 class CharTokenizer(Tokenizer[str]):
