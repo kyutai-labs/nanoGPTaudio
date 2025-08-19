@@ -7,9 +7,7 @@ from pathlib import Path
 
 import librosa
 import numpy as np
-import torch
 import tqdm
-from einops import rearrange
 
 SAMPLE_RATE = 16000
 SCRIPT_DIR = Path(__file__).parent
@@ -18,7 +16,7 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 # add to pythonpath because we're not a proper Python package
 sys.path.append(str(REPO_ROOT))
 
-from codec import Codec
+from tokenizer import CodecTokenizer, MuLawTokenizer, Tokenizer
 
 
 def get_codec_checkpoint(codec_name: str):
@@ -41,42 +39,14 @@ class AudioTooShort(Exception):
     """The audio is too short to process."""
 
 
-def main(encoding: str):
-    if encoding.startswith("codec"):
-        codec = Codec.from_checkpoint(get_codec_checkpoint(encoding))
-        vocab_size = codec.config.codebook_size
-    else:
-        assert encoding == "mu-law-256"
-        vocab_size = 256
-
-    out_dir = SCRIPT_DIR / encoding
+def main(tokenizer: Tokenizer[np.ndarray]):
+    out_dir = SCRIPT_DIR / str(tokenizer)
 
     def load_audio_file(file: Path) -> np.ndarray:
         audio, sr = librosa.load(file, mono=True)
         audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
 
-        if encoding == "mu-law-256":
-            audio_mu_law = (librosa.mu_compress(audio, mu=255) + 128).astype(np.uint8)
-            return audio_mu_law
-        else:
-            assert encoding.startswith("codec")
-            audio = torch.Tensor(audio)
-            factor = codec.encoder.downscaling_factor()
-
-            if len(audio) < factor:
-                raise AudioTooShort
-
-            audio = audio[None, None, : len(audio) // factor * factor]
-
-            codes, _reconstructed, _losses = codec(audio)
-
-            # To avoid having to model multiple streams, flatten the levels of the RVQ
-            # into one
-            flat_codes = rearrange(codes, "1 n_codes t -> (t n_codes)")
-            # We might fit into int16 but it could lead to annoying bugs
-            assert flat_codes.dtype == torch.int32
-
-            return flat_codes
+        return tokenizer.encode(audio).cpu().numpy()
 
     files = get_file_list()
     print(f"Found {len(files)} audio files.")
@@ -114,19 +84,19 @@ def main(encoding: str):
         audio_data.tofile(output_file)
         print(f"Saved {split} data to {output_file}")
 
-    create_meta(encoding=encoding, vocab_size=vocab_size, dtype=audio_data.dtype)
+    create_meta(tokenizer)
 
 
-def create_meta(encoding: str, vocab_size: int, dtype: np.dtype):
+def create_meta(tokenizer: Tokenizer):
     meta = {
-        "vocab_size": vocab_size,
         "sample_rate": SAMPLE_RATE,
         "modality": "audio",
-        "encoding": encoding,
-        "dtype": str(dtype),
+        "tokenizer": str(tokenizer),
+        "vocab_size": tokenizer.vocab_size(),
+        "dtype": str(tokenizer.dtype()).replace("torch.", ""),
     }
 
-    meta_file = SCRIPT_DIR / encoding / "meta.json"
+    meta_file = SCRIPT_DIR / str(tokenizer) / "meta.json"
     meta_file.parent.mkdir(exist_ok=True)
 
     with open(meta_file, "w") as f:
@@ -136,9 +106,14 @@ def create_meta(encoding: str, vocab_size: int, dtype: np.dtype):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--encoding", default="mu-law-256")
+    parser.add_argument("--tokenizer", default="mu-law-256")
     args = parser.parse_args()
 
-    assert args.encoding == "mu-law-256" or args.encoding.startswith("codec")
+    assert args.tokenizer == "mu-law-256" or args.tokenizer.startswith("codec")
 
-    main(args.encoding)
+    if args.tokenizer.startswith("codec"):
+        tokenizer = CodecTokenizer(args.tokenizer)
+    else:
+        tokenizer = MuLawTokenizer()
+
+    main(tokenizer)
