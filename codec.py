@@ -449,10 +449,20 @@ class Codec(nn.Module):
         return optimizer
 
     @staticmethod
-    def from_checkpoint(checkpoint_path: Path | str, device: str = "cuda"):
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+    def from_checkpoint(checkpoint_path_or_name: Path | str, device: str = "cuda"):
+        try:
+            checkpoint = torch.load(checkpoint_path_or_name, map_location=device)
+        except FileNotFoundError:
+            checkpoint_path = (
+                Path(__file__).parent
+                / "models"
+                / checkpoint_path_or_name
+                / "codec_ckpt.pt"
+            )
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+
         config = CodecConfig(**checkpoint["model_args"])
-        model = Codec(config)
+        model = Codec(config).to(device)
 
         state_dict = checkpoint["model"]
         model.load_state_dict(state_dict)

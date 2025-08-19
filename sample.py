@@ -11,10 +11,17 @@ from typing import Literal
 
 import librosa
 import numpy as np
-import tiktoken
+import soundfile as sf
 import torch
 
 from model import GPT, GPTConfig
+from tokenizer import (
+    CharTokenizer,
+    CodecTokenizer,
+    MuLawTokenizer,
+    TiktokenTokenizer,
+    Tokenizer,
+)
 
 # -----------------------------------------------------------------------------
 init_from = (
@@ -90,6 +97,9 @@ if (
 ):  # older checkpoints might not have these...
     meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.json")
     load_meta = os.path.exists(meta_path)
+
+tokenizer: Tokenizer
+
 if load_meta:
     print(f"Loading meta from {meta_path}...")
     with open(meta_path, "r", encoding="utf-8") as f:
@@ -98,30 +108,18 @@ if load_meta:
     modality = meta.get("modality", "text")
 
     if modality == "text":
-        stoi, itos = meta["stoi"], meta["itos"]
-        encode = lambda s: [stoi[c] for c in s]
-        decode = lambda l: "".join([itos[str(i)] for i in l])
+        tokenizer = CharTokenizer(meta)
     elif modality == "audio":
-        assert meta["encoding"] == "mu-law-256", (
-            "Only mu-law encoding is supported for audio."
-        )
-
-        def encode(audio):
-            return librosa.mu_compress(audio, mu=255) + 128
-
-        def decode(tokens):
-            # decode mu-law encoded audio
-            audio = librosa.mu_expand(tokens.cpu().numpy() - 128, mu=255)
-            return audio
-
+        if meta["encoding"] == "mu-law-256":
+            tokenizer = MuLawTokenizer()
+        else:
+            tokenizer = CodecTokenizer(meta, device=device)
     else:
         raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 else:
     # ok let's assume gpt-2 encodings by default
     print("No meta.json found, assuming GPT-2 encodings...")
-    enc = tiktoken.get_encoding("gpt2")
-    encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
-    decode = lambda l: enc.decode(l)
+    tokenizer = TiktokenTokenizer("gpt2")
 
 # encode the beginning of the prompt
 if start.startswith("FILE:"):
@@ -135,7 +133,8 @@ else:
     if start == "\n":
         start = np.array([0.0])
 
-start_ids = encode(start)
+start_ids = tokenizer.encode(start)
+assert start_ids.ndim == 1, f"Expected 1D result from encode(), got {start_ids.shape=}"
 x = torch.tensor(start_ids, dtype=torch.long, device=device)
 x = x.repeat(num_samples, 1)
 
@@ -156,12 +155,11 @@ with torch.no_grad():
         samples_dir.mkdir(parents=True, exist_ok=True)
         for k in range(num_samples):
             if modality == "text":
-                print(decode(y[k].tolist()))
+                print(tokenizer.decode(y[k].tolist()))
                 print("---------------")
             elif modality == "audio":
-                audio = decode(y[k])
-                import soundfile as sf
+                audio = tokenizer.decode(y[k])
 
-                sf.write(
-                    samples_dir / f"{file_prefix}_{k}.wav", audio, meta["sample_rate"]
-                )
+                output_path = samples_dir / f"{file_prefix}_{k}.wav"
+                sf.write(output_path, audio, meta["sample_rate"])
+                print(f"Generated {output_path}")

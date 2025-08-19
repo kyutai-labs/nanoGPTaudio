@@ -1,4 +1,6 @@
-out_dir = "out-expresso-small-block-size-2048"
+from datetime import datetime
+
+out_dir = "models/lm_expresso_" + datetime.now().strftime("%m%d_%H%M%S")
 eval_interval = 250  # keep frequent because we'll overfit
 eval_iters = 200
 log_interval = 50  # don't print too too often
@@ -8,9 +10,9 @@ always_save_checkpoint = False
 
 wandb_log = True  # override via command line if you like
 wandb_project = "vaclav-nanogpt-audio"
-wandb_run_name = "expresso-small-block-size-2048"
+wandb_run_name = out_dir.split("/")[-1]
 
-dataset = "expresso"
+dataset = "expresso/codec_0818_174920_4_rvq"
 gradient_accumulation_steps = 8
 batch_size = 32
 block_size = 2048  # context size

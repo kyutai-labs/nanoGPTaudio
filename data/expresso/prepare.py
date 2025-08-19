@@ -37,6 +37,10 @@ def get_file_list() -> list[Path]:
     return files
 
 
+class AudioTooShort(Exception):
+    """The audio is too short to process."""
+
+
 def main(encoding: str):
     if encoding.startswith("codec"):
         codec = Codec.from_checkpoint(get_codec_checkpoint(encoding))
@@ -58,7 +62,12 @@ def main(encoding: str):
             assert encoding.startswith("codec")
             audio = torch.Tensor(audio)
             factor = codec.encoder.downscaling_factor()
-            audio = audio[None, None, : -(len(audio) % factor)]
+
+            if len(audio) < factor:
+                raise AudioTooShort
+
+            audio = audio[None, None, : len(audio) // factor * factor]
+
             codes, _reconstructed, _losses = codec(audio)
 
             # To avoid having to model multiple streams, flatten the levels of the RVQ
@@ -91,7 +100,12 @@ def main(encoding: str):
         #     )
         audio_data = []
         for file in tqdm.tqdm(file_list, desc=f"Loading {split} files"):
-            audio_data.append(load_audio_file(file))
+            print(file)
+            try:
+                audio_data.append(load_audio_file(file))
+            except AudioTooShort:
+                print(f"Skipping {file} because it is too short.")
+                continue
 
         audio_data = np.concatenate(audio_data, axis=0)
 
