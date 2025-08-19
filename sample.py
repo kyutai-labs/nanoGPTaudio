@@ -87,39 +87,25 @@ model.to(device)
 if compile:
     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
 
-# look for the meta pickle in case it is available in the dataset folder
-modality: Literal["text", "audio"] = "text"
-load_meta = False
-if (
-    init_from == "resume"
-    and "config" in checkpoint
-    and "dataset" in checkpoint["config"]
-):  # older checkpoints might not have these...
-    meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.json")
-    load_meta = os.path.exists(meta_path)
 
+meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.json")
+print(f"Loading meta from {meta_path}...")
+with open(meta_path, "r", encoding="utf-8") as f:
+    meta = json.load(f)
+
+modality: Literal["text", "audio"] = meta.get("modality", "text")
 tokenizer: Tokenizer
 
-if load_meta:
-    print(f"Loading meta from {meta_path}...")
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-
-    modality = meta.get("modality", "text")
-
-    if modality == "text":
-        tokenizer = CharTokenizer(meta)
-    elif modality == "audio":
-        if meta["encoding"] == "mu-law-256":
-            tokenizer = MuLawTokenizer()
-        else:
-            tokenizer = CodecTokenizer(meta, device=device)
+if modality == "text":
+    tokenizer = CharTokenizer(meta)
+    # TODO: when to load GPT-2 tokenizer?
+elif modality == "audio":
+    if meta["encoding"] == "mu-law-256":
+        tokenizer = MuLawTokenizer()
     else:
-        raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
+        tokenizer = CodecTokenizer(meta, device=device)
 else:
-    # ok let's assume gpt-2 encodings by default
-    print("No meta.json found, assuming GPT-2 encodings...")
-    tokenizer = TiktokenTokenizer("gpt2")
+    raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 
 # encode the beginning of the prompt
 if start.startswith("FILE:"):
