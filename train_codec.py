@@ -1,7 +1,7 @@
 import dataclasses
+import json
 import math
 import os
-import pickle
 import time
 from contextlib import nullcontext
 from datetime import datetime
@@ -93,10 +93,10 @@ ctx = (
 data_dir = os.path.join("data", dataset)
 
 # attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, "meta.pkl")
+meta_path = os.path.join(data_dir, "meta.json")
 try:
-    with open(meta_path, "rb") as f:
-        meta = pickle.load(f)
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
 except FileNotFoundError as f:
     raise FileNotFoundError(f"Meta file not found: {meta_path}") from f
 
@@ -175,7 +175,7 @@ def get_metrics():
         for k in range(eval_iters):
             x = get_batch(split)
             with ctx:
-                reconstructed, cur_losses = model(x)
+                _codes, reconstructed, cur_losses = model(x)
 
             for name, loss in cur_losses.items():
                 key = f"{split}/{name}_loss"

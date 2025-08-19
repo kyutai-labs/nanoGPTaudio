@@ -2,17 +2,17 @@
 Sample from a trained model
 """
 
-from datetime import datetime
+import json
 import os
-from pathlib import Path
-import pickle
 from contextlib import nullcontext
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
+import librosa
 import numpy as np
 import tiktoken
 import torch
-import librosa
 
 from model import GPT, GPTConfig
 
@@ -88,19 +88,19 @@ if (
     and "config" in checkpoint
     and "dataset" in checkpoint["config"]
 ):  # older checkpoints might not have these...
-    meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.pkl")
+    meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.json")
     load_meta = os.path.exists(meta_path)
 if load_meta:
     print(f"Loading meta from {meta_path}...")
-    with open(meta_path, "rb") as f:
-        meta = pickle.load(f)
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
 
     modality = meta.get("modality", "text")
 
     if modality == "text":
         stoi, itos = meta["stoi"], meta["itos"]
         encode = lambda s: [stoi[c] for c in s]
-        decode = lambda l: "".join([itos[i] for i in l])
+        decode = lambda l: "".join([itos[str(i)] for i in l])
     elif modality == "audio":
         assert meta["encoding"] == "mu-law-256", (
             "Only mu-law encoding is supported for audio."
@@ -118,7 +118,7 @@ if load_meta:
         raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 else:
     # ok let's assume gpt-2 encodings by default
-    print("No meta.pkl found, assuming GPT-2 encodings...")
+    print("No meta.json found, assuming GPT-2 encodings...")
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)

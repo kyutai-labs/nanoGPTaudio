@@ -5,6 +5,7 @@ https://arxiv.org/abs/2005.00341
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -97,6 +98,9 @@ class Encoder(nn.Module):
         for block in self.blocks:
             x = block(x)
         return x
+
+    def downscaling_factor(self):
+        return 2 ** len(self.blocks)
 
 
 class DecoderBlock(nn.Module):
@@ -191,10 +195,12 @@ class VectorQuantizer(nn.Module):
         """Return the code indices for `x` of shape [batch, channels]."""
         assert x.dim() == 2
         distances = torch.cdist(self.codebook(), x)
-        codes = distances.argmin(dim=0)
+        # int64 is default, save some space
+        codes = distances.argmin(dim=0).to(dtype=torch.int32)
         return codes
 
     def decode(self, codes: torch.Tensor):
+        """Return the continuous embeddings for `codes` of shape [batch]"""
         quantized = F.embedding(codes, self.codebook())
         return quantized
 
@@ -273,13 +279,23 @@ class ResidualVectorQuantizer(nn.Module):
             ]
         )
 
+    def decode(self, codes: torch.Tensor):
+        """Return the continuous embeddings for `codes` of shape [batch, n_codebooks]"""
+        embeddings_q = torch.zeros(codes.shape[0], self.channels, device=codes.device)
+        for i in range(self.n_codebooks):
+            embeddings_q += self.bottlenecks[i].decode(codes[:, i])
+        return embeddings_q
+
     def forward(self, embeddings: torch.Tensor):
         assert embeddings.dim() == 2, (
             f"Expected shape [batch, channels], got {embeddings.shape=}"
         )
 
         codes = torch.zeros(
-            embeddings.shape[0], self.n_codebooks, device=embeddings.device
+            embeddings.shape[0],
+            self.n_codebooks,
+            device=embeddings.device,
+            dtype=torch.int32,
         )
 
         embeddings_q = torch.zeros_like(embeddings)
@@ -358,17 +374,46 @@ class Codec(nn.Module):
         )
         self.multiscale_spectrogram_loss = MultiscaleSpectrogramLoss()
 
-    def forward(self, audio):
+    def decode(self, codes: torch.Tensor):
+        assert codes.dim() == 3, (
+            f"Expected shape [batch, n_codebooks, time], got {codes.shape=}"
+        )
+        assert codes.shape[1] == self.config.n_codebooks
+
+        batch_size = codes.shape[0]
+        flat_codes = rearrange(codes, "b n_codebooks t -> (b t) n_codebooks")
+
+        flat_embeddings_q = self.bottleneck.decode(flat_codes)
+        embeddings_q = rearrange(flat_embeddings_q, "(b t) c -> b c t", b=batch_size)
+        reconstructed = self.decoder(embeddings_q)
+
+        return reconstructed
+
+    def forward(self, audio: torch.Tensor):
+        assert audio.dim() == 3, f"Expected shape [batch, 1, time], got {audio.shape=}"
+        assert audio.shape[1] == 1, (
+            "Wrong number of channels. "
+            f"Expected shape [batch, 1, time], got {audio.shape=}"
+        )
+
+        factor = self.encoder.downscaling_factor()
+        assert audio.shape[2] % factor == 0, (
+            "Audio length must be divisible by the downscaling factor of the encoder "
+            f"({factor}), got length {audio.shape[2]}. "
+            f"Try {audio.shape[2] // factor * factor}."
+        )
+
         embeddings = self.encoder(audio)
 
         flat_embeddings = rearrange(embeddings, "b c t -> (b t) c")
 
-        _codes_flat, flat_embeddings_q, commitment_loss = self.bottleneck(
+        codes_flat, flat_embeddings_q, commitment_loss = self.bottleneck(
             flat_embeddings
         )
         embeddings_q = rearrange(
             flat_embeddings_q, "(b t) c -> b c t", b=audio.shape[0]
         )
+        codes = rearrange(codes_flat, "(b t) n_codes -> b n_codes t", b=audio.shape[0])
 
         reconstructed = self.decoder(embeddings_q)
 
@@ -392,7 +437,7 @@ class Codec(nn.Module):
         losses["commitment"].detach_()
         losses["spectral"].detach_()
 
-        return reconstructed, losses
+        return codes, reconstructed, losses
 
     def configure_optimizers(self, weight_decay, learning_rate, device_type):
         optimizer = torch.optim.AdamW(
@@ -402,3 +447,14 @@ class Codec(nn.Module):
             fused=device_type == "cuda",
         )
         return optimizer
+
+    @staticmethod
+    def from_checkpoint(checkpoint_path: Path | str, device: str = "cuda"):
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        config = CodecConfig(**checkpoint["model_args"])
+        model = Codec(config)
+
+        state_dict = checkpoint["model"]
+        model.load_state_dict(state_dict)
+
+        return model

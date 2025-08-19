@@ -5,10 +5,11 @@ Will save train.bin, val.bin containing the ids, and meta.pkl containing the
 encoder and decoder and some other related info.
 """
 
+import json
 import os
-import pickle
-import requests
+
 import numpy as np
+import requests
 
 # download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), "input.txt")
@@ -65,8 +66,8 @@ meta = {
     "itos": itos,
     "stoi": stoi,
 }
-with open(os.path.join(os.path.dirname(__file__), "meta.pkl"), "wb") as f:
-    pickle.dump(meta, f)
+with open(os.path.join(os.path.dirname(__file__), "meta.json"), "w") as f:
+    json.dump(meta, f, indent=2)
 
 # length of dataset in characters:  1115394
 # all the unique characters:

@@ -16,9 +16,9 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
+import json
 import math
 import os
-import pickle
 import time
 from contextlib import nullcontext
 
@@ -132,12 +132,12 @@ ctx = (
 data_dir = os.path.join("data", dataset)
 
 # attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, "meta.pkl")
+meta_path = os.path.join(data_dir, "meta.json")
 meta_vocab_size = None
 meta_dtype = "uint16"
 if os.path.exists(meta_path):
-    with open(meta_path, "rb") as f:
-        meta = pickle.load(f)
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
     meta_vocab_size = meta["vocab_size"]
     meta_dtype = meta.get("dtype", "uint16")
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")

@@ -16,3 +16,4 @@ for-video/
 playground.ipynb
 wandb/
 models/
+meta.json
