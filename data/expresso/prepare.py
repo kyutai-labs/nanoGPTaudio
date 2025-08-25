@@ -14,7 +14,7 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 # add to pythonpath because we're not a proper Python package
 sys.path.append(str(REPO_ROOT))
 
-from tokenizer import CodecTokenizer, MuLawTokenizer, Tokenizer
+from tokenizer import Tokenizer, audio_tokenizer_from_name
 
 
 def get_codec_checkpoint(codec_name: str):
@@ -107,11 +107,6 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer", default="mu-law-256")
     args = parser.parse_args()
 
-    assert args.tokenizer == "mu-law-256" or args.tokenizer.startswith("codec")
-
-    if args.tokenizer.startswith("codec"):
-        tokenizer = CodecTokenizer(args.tokenizer)
-    else:
-        tokenizer = MuLawTokenizer()
+    tokenizer = audio_tokenizer_from_name(args.tokenizer)
 
     main(tokenizer)

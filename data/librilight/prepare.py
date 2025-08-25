@@ -24,7 +24,7 @@ MAX_LENGTH_SEC = 60
 
 import time
 
-from tokenizer import CodecTokenizer, MuLawTokenizer, Tokenizer
+from tokenizer import Tokenizer, audio_tokenizer_from_name
 
 
 @dataclass
@@ -39,21 +39,24 @@ class AudioTooShort(Exception):
     """The audio is too short to process."""
 
 
-def load_audio_file_raw(dataset_file: DatasetFile) -> np.ndarray:
+def load_audio_file_raw(args: tuple[DatasetFile, int]) -> np.ndarray:
+    dataset_file, sample_rate = args
     # print(f"Loading {Path(dataset_file.path).name}")
     audio, sr = librosa.load(dataset_file.path, mono=True)
-
-    audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
+    audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
     return audio
 
 
-def get_audio_chunks(dataset_files: list[DatasetFile]) -> Iterable[np.ndarray]:
+def get_audio_chunks(
+    dataset_files: list[DatasetFile], sample_rate: int
+) -> Iterable[np.ndarray]:
     n_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", f"{os.cpu_count()}"))
 
     with Pool(processes=n_cpus) as pool:
-        for loaded_file in pool.imap(load_audio_file_raw, dataset_files, chunksize=1):
-            for i in range(0, len(loaded_file), SAMPLE_RATE * MAX_LENGTH_SEC):
-                yield loaded_file[i : i + SAMPLE_RATE * MAX_LENGTH_SEC]
+        args_iter = ((df, sample_rate) for df in dataset_files)
+        for loaded_file in pool.imap(load_audio_file_raw, args_iter, chunksize=1):
+            for i in range(0, len(loaded_file), sample_rate * MAX_LENGTH_SEC):
+                yield loaded_file[i : i + sample_rate * MAX_LENGTH_SEC]
 
 
 def main(egs_file: Path, tokenizer: Tokenizer[np.ndarray], batch_size: int):
@@ -76,37 +79,37 @@ def main(egs_file: Path, tokenizer: Tokenizer[np.ndarray], batch_size: int):
         print(f"Processing {split} split with {len(file_list)} files.")
         t_split_start = time.time()
 
-        audio_data = []
-
         # Account for the fact that long files get split up
         n_chunks = sum(ceil(file.duration / MAX_LENGTH_SEC) for file in file_list)
 
-        t_last = None
-        for audio_batch in tqdm.tqdm(
-            itertools.batched(get_audio_chunks(file_list), batch_size),
-            total=ceil(n_chunks / batch_size),
-            desc=f"Creating {split} split",
-        ):
-            t2 = time.time()
-            if t_last is not None:
-                time_waited = t2 - t_last
-                if time_waited > 0.1:
-                    print(
-                        f"Warning: waited {time_waited:.2f} seconds for next batch, "
-                        "I/O might be the bottleneck"
-                    )
-
-            with torch.no_grad():
-                encoded_list = tokenizer.encode_list(list(audio_batch))
-
-            audio_data += [x.cpu().numpy() for x in encoded_list]
-            t_last = time.time()
-
-        audio_data = np.concatenate(audio_data, axis=0)
-
         out_dir.mkdir(exist_ok=True)
         output_file = out_dir / Path(f"{split}.bin")
-        audio_data.tofile(output_file)
+        # Stream the outputs to the file as we go to avoid keeping everything in memory
+        with output_file.open("wb") as f:
+            t_last = None
+            sample_rate = tokenizer.sample_rate()
+            for audio_batch in tqdm.tqdm(
+                itertools.batched(get_audio_chunks(file_list, sample_rate), batch_size),
+                total=ceil(n_chunks / batch_size),
+                desc=f"Creating {split} split",
+            ):
+                t2 = time.time()
+                if t_last is not None:
+                    time_waited = t2 - t_last
+                    if time_waited > 0.1:
+                        print(
+                            f"Warning: waited {time_waited:.2f} seconds for next batch, "
+                            "I/O might be the bottleneck"
+                        )
+
+                with torch.no_grad():
+                    encoded_list = tokenizer.encode_list(list(audio_batch))
+
+                for x in encoded_list:
+                    f.write(x.cpu().numpy().tobytes())
+
+                t_last = time.time()
+
         print(f"Saved {split} data to {output_file}")
         print(f"Creating {split} took {time.time() - t_split_start:.2f}s")
 
@@ -141,11 +144,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 
-    assert args.tokenizer == "mu-law-256" or args.tokenizer.startswith("codec")
-
-    if args.tokenizer.startswith("codec"):
-        tokenizer = CodecTokenizer(args.tokenizer)
-    else:
-        tokenizer = MuLawTokenizer()
+    tokenizer = audio_tokenizer_from_name(args.tokenizer)
 
     main(args.egs_file, tokenizer, batch_size=args.batch_size)

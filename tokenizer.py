@@ -1,10 +1,11 @@
 from pathlib import Path
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar, cast
 
 import librosa
 import numpy as np
 import torch
 from einops import rearrange
+from transformers import MimiModel
 
 from codec import Codec
 
@@ -39,6 +40,11 @@ class Tokenizer(Protocol, Generic[T]):
     def dtype(self) -> torch.dtype:
         """What is the dtype of the tokens?"""
         ...
+
+    def sample_rate(self) -> int:
+        """Sample rate of the audio expected by this tokenizer (if applicable)."""
+        # The tokenizer abstraction is a bit leaky here - not applicable to text
+        raise NotImplementedError()
 
 
 class CharTokenizer(Tokenizer[str]):
@@ -108,6 +114,9 @@ class MuLawTokenizer(Tokenizer[np.ndarray]):
     def name(self):
         return "mu-law-256"
 
+    def sample_rate(self) -> int:
+        return 16000
+
 
 class CodecTokenizer(Tokenizer[np.ndarray]):
     def __init__(self, name: str, device: str = "cuda"):
@@ -132,7 +141,6 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
             codes, _reconstructed, _losses = self.codec(audio)
 
         # To avoid having to model multiple streams, flatten the levels of the RVQ
-        # into one
         flat_codes = rearrange(codes, "b n_codebooks t -> b (t n_codebooks)")
 
         if not is_batched:
@@ -183,3 +191,74 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
 
     def n_codebooks(self):
         return self.codec.config.n_codebooks
+
+    def sample_rate(self) -> int:
+        return 16000
+
+
+class MimiTokenizer(Tokenizer[np.ndarray]):
+    def __init__(self, device: str = "cuda"):
+        self.device = device
+        self.mimi = MimiModel.from_pretrained("kyutai/mimi").to(device)
+
+    def encode(self, raw: np.ndarray) -> torch.Tensor:
+        audio = torch.Tensor(raw).to(self.device)
+
+        is_batched = audio.ndim == 2
+        if not is_batched:
+            audio = audio[None, :]
+
+        audio = rearrange(audio, "b t -> b 1 t")
+
+        with torch.no_grad():
+            codes = cast(torch.Tensor, self.mimi.encode(audio).audio_codes)
+            codes = codes.to(dtype=torch.int32)
+
+            # To avoid having to model multiple streams, flatten the levels of the RVQ
+            flat_codes = rearrange(codes, "b n_codebooks t -> b (t n_codebooks)")
+
+        if not is_batched:
+            assert flat_codes.shape[0] == 1
+            flat_codes = flat_codes[0]
+
+        return flat_codes
+
+    def decode(self, tokens: torch.Tensor) -> np.ndarray:
+        # The codes are flattened, so if there is an incomplete step, drop it
+        tokens = tokens[: len(tokens) // self.n_codebooks() * self.n_codebooks()]
+
+        codes = rearrange(
+            tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=self.n_codebooks()
+        )
+        decoded = self.mimi.decode(codes[None, :, :])[0][0]
+
+        audio = decoded.detach().to("cpu", dtype=torch.float32).numpy()
+
+        return audio
+
+    def vocab_size(self):
+        return self.mimi.config.codebook_size
+
+    def dtype(self):
+        return torch.int32
+
+    def __str__(self):
+        return "mimi"
+
+    def n_codebooks(self):
+        return self.mimi.config.num_quantizers
+
+    def sample_rate(self) -> int:
+        # Always 24000 in practice, but let's not hardcode
+        return self.mimi.config.sampling_rate
+
+
+def audio_tokenizer_from_name(name: str):
+    if name.startswith("codec"):
+        return CodecTokenizer(name)
+    elif name == "mimi":
+        return MimiTokenizer()
+    elif name == "mu-law-256":
+        return MuLawTokenizer()
+    else:
+        raise ValueError(f"Could not parse audio tokenizer name: {name}")
