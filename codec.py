@@ -233,7 +233,11 @@ class VectorQuantizer(nn.Module):
 
                 cur_code_embedding_sum = torch.zeros_like(
                     self.code_embedding_sum
-                ).scatter_add(0, repeat(codes, "n -> n d", d=self.channels), embeddings)
+                ).scatter_add(
+                    0,
+                    repeat(codes, "n -> n d", d=self.channels).to(dtype=torch.long),
+                    embeddings,
+                )
 
                 exponential_moving_average_update(
                     self.code_embedding_sum,

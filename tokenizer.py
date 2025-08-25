@@ -21,6 +21,13 @@ class Tokenizer(Protocol, Generic[T]):
         """Take type T and encode it into a 1D int tensor of tokens."""
         ...
 
+    def encode_list(self, raw: list[T]) -> list[torch.Tensor]:
+        """Encode a list of Ts of uneven lengths.
+
+        Override for more efficient implementations.
+        """
+        return [self.encode(x) for x in raw]
+
     def decode(self, tokens: torch.Tensor) -> T:
         """Take a 1D int tensor of tokens and decode it into type T."""
         ...
@@ -110,16 +117,47 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
 
     def encode(self, raw: np.ndarray) -> torch.Tensor:
         audio = torch.Tensor(raw).to(self.device)
+
+        is_batched = audio.ndim == 2
+        if not is_batched:
+            audio = audio[None, :]
+
+        # Make sure the length is divisible
         factor = self.codec.encoder.downscaling_factor()
-        audio = audio[None, None, : len(audio) // factor * factor]
+        audio = audio[..., : audio.shape[-1] // factor * factor]
+
+        audio = rearrange(audio, "b t -> b 1 t")
 
         with torch.no_grad():
             codes, _reconstructed, _losses = self.codec(audio)
 
         # To avoid having to model multiple streams, flatten the levels of the RVQ
         # into one
-        flat_codes = rearrange(codes, "1 n_codebooks t -> (t n_codebooks)")
+        flat_codes = rearrange(codes, "b n_codebooks t -> b (t n_codebooks)")
+
+        if not is_batched:
+            assert flat_codes.shape[0] == 1
+            flat_codes = flat_codes[0]
+
         return flat_codes
+
+    def encode_list(self, raw: list[np.ndarray]):
+        for i in range(len(raw)):
+            assert raw[i].ndim == 1, (
+                f"Expected 1D array at index {i}, got {raw[i].ndim}D array"
+            )
+
+        max_len = max(a.shape[0] for a in raw)
+        padded_audio = np.stack(
+            [np.pad(a, (0, max_len - a.shape[0]), mode="constant") for a in raw]
+        )  # shape [b, t]
+
+        factor = self.codec.encoder.downscaling_factor()
+        encoded = self.encode(padded_audio)  # shape [b, t // factor]
+
+        # Split encoded back into list with correct sizes
+        encoded_list = [encoded[i, : len(raw[i]) // factor] for i in range(len(raw))]
+        return encoded_list
 
     def decode(self, tokens: torch.Tensor) -> np.ndarray:
         n_codebooks = self.codec.config.n_codebooks
