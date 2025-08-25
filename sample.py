@@ -100,10 +100,10 @@ if modality == "text":
     tokenizer = CharTokenizer(meta)
     # TODO: when to load GPT-2 tokenizer?
 elif modality == "audio":
-    if meta["encoding"] == "mu-law-256":
+    if meta["tokenizer"] == "mu-law-256":
         tokenizer = MuLawTokenizer()
     else:
-        tokenizer = CodecTokenizer(meta, device=device)
+        tokenizer = CodecTokenizer(meta["tokenizer"], device=device)
 else:
     raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 

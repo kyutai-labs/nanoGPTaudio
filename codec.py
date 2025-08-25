@@ -378,7 +378,10 @@ class Codec(nn.Module):
         assert codes.dim() == 3, (
             f"Expected shape [batch, n_codebooks, time], got {codes.shape=}"
         )
-        assert codes.shape[1] == self.config.n_codebooks
+        assert codes.shape[1] == self.config.n_codebooks, (
+            f"Expected {self.config.n_codebooks} codebooks, got {codes.shape[1]}, "
+            f"{codes.shape=}"
+        )
 
         batch_size = codes.shape[0]
         flat_codes = rearrange(codes, "b n_codebooks t -> (b t) n_codebooks")

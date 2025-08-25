@@ -60,10 +60,18 @@ def add_file_info(dataset_file: DatasetFile):
     return dataset_file
 
 
-def get_lengths(dataset_files: list[DatasetFile], n_processes: int = 4):
+def get_metadata(dataset_files: list[DatasetFile], n_processes: int = 4):
     with multiprocessing.Pool(n_processes) as pool:
-        new_dataset_files = pool.map(add_file_info, dataset_files, chunksize=256)
-    # new_dataset_files = [add_file_info(f) for f in dataset_files]
+        new_dataset_files = pool.map(
+            add_file_info,
+            tqdm.tqdm(
+                dataset_files,
+                disable=len(dataset_files) < 1000,
+                leave=False,
+                desc="Getting metadata",
+            ),
+            chunksize=256,
+        )
     return new_dataset_files
 
 
@@ -78,7 +86,7 @@ def main(librilight_dir: Path, target_hours: float):
     print("Computing audio file durations")
     n_files_scanned = 1
     while n_files_scanned < len(paths):
-        new_dataset_files = get_lengths(dataset_files[:n_files_scanned])
+        new_dataset_files = get_metadata(dataset_files[:n_files_scanned])
         for i in range(n_files_scanned):
             dataset_files[i] = new_dataset_files[i]
 

@@ -118,17 +118,19 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
 
         # To avoid having to model multiple streams, flatten the levels of the RVQ
         # into one
-        flat_codes = rearrange(codes, "1 n_codes t -> (t n_codes)")
+        flat_codes = rearrange(codes, "1 n_codebooks t -> (t n_codebooks)")
         return flat_codes
 
     def decode(self, tokens: torch.Tensor) -> np.ndarray:
+        n_codebooks = self.codec.config.n_codebooks
+        # The codes are flattened, so if there is an incomplete step, drop it
+        tokens = tokens[: len(tokens) // n_codebooks * n_codebooks]
+
         codes = rearrange(
-            tokens,
-            "(t n_codebooks) -> n_codebooks t",
-            n_codebooks=4,
+            tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=n_codebooks
         )
         decoded = self.codec.decode(codes[None, :, :])[0, 0]
-        return decoded.to("cpu", dtype=self.dtype()).numpy()
+        return decoded.to("cpu", dtype=torch.float32).numpy()
 
     def vocab_size(self):
         return self.codec.config.codebook_size
