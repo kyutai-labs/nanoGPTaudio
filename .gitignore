@@ -17,3 +17,4 @@ playground.ipynb
 wandb/
 models/
 meta.json
+librilight*.jsonl

@@ -153,22 +153,24 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
         )  # shape [b, t]
 
         factor = self.codec.encoder.downscaling_factor()
-        encoded = self.encode(padded_audio)  # shape [b, t // factor]
+        encoded = self.encode(padded_audio)  # shape [b, t // factor * n_codebooks]
 
         # Split encoded back into list with correct sizes
-        encoded_list = [encoded[i, : len(raw[i]) // factor] for i in range(len(raw))]
+        encoded_list = [
+            encoded[i, : len(raw[i]) // factor * self.n_codebooks()]
+            for i in range(len(raw))
+        ]
         return encoded_list
 
     def decode(self, tokens: torch.Tensor) -> np.ndarray:
-        n_codebooks = self.codec.config.n_codebooks
         # The codes are flattened, so if there is an incomplete step, drop it
-        tokens = tokens[: len(tokens) // n_codebooks * n_codebooks]
+        tokens = tokens[: len(tokens) // self.n_codebooks() * self.n_codebooks()]
 
         codes = rearrange(
-            tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=n_codebooks
+            tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=self.n_codebooks()
         )
         decoded = self.codec.decode(codes[None, :, :])[0, 0]
-        return decoded.to("cpu", dtype=torch.float32).numpy()
+        return decoded.detach().to("cpu", dtype=torch.float32).numpy()
 
     def vocab_size(self):
         return self.codec.config.codebook_size
@@ -178,3 +180,6 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
 
     def __str__(self):
         return self.name
+
+    def n_codebooks(self):
+        return self.codec.config.n_codebooks
