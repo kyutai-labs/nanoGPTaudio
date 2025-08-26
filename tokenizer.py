@@ -177,8 +177,8 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
         codes = rearrange(
             tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=self.n_codebooks()
         )
-        decoded = self.codec.decode(codes[None, :, :])[0, 0]
-        return decoded.detach().to("cpu", dtype=torch.float32).numpy()
+        decoded = self.codec.decode(codes[None, :, :])
+        return decoded[0, 0].detach().to("cpu", dtype=torch.float32).numpy()
 
     def vocab_size(self):
         return self.codec.config.codebook_size
@@ -223,6 +223,27 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
 
         return flat_codes
 
+    def encode_list(self, raw: list[np.ndarray]):
+        for i in range(len(raw)):
+            assert raw[i].ndim == 1, (
+                f"Expected 1D array at index {i}, got {raw[i].ndim}D array"
+            )
+
+        max_len = max(a.shape[0] for a in raw)
+        padded_audio = np.stack(
+            [np.pad(a, (0, max_len - a.shape[0]), mode="constant") for a in raw]
+        )  # shape [b, t]
+
+        factor = self.downscaling_factor()
+        encoded = self.encode(padded_audio)  # shape [b, t // factor * n_codebooks]
+
+        # Split encoded back into list with correct sizes
+        encoded_list = [
+            encoded[i, : len(raw[i]) // factor * self.n_codebooks()]
+            for i in range(len(raw))
+        ]
+        return encoded_list
+
     def decode(self, tokens: torch.Tensor) -> np.ndarray:
         # The codes are flattened, so if there is an incomplete step, drop it
         tokens = tokens[: len(tokens) // self.n_codebooks() * self.n_codebooks()]
@@ -230,9 +251,9 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
         codes = rearrange(
             tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=self.n_codebooks()
         )
-        decoded = self.mimi.decode(codes[None, :, :])[0][0]
+        decoded = self.mimi.decode(codes[None, :, :]).audio_values
 
-        audio = decoded.detach().to("cpu", dtype=torch.float32).numpy()
+        audio = decoded[0, 0].detach().to("cpu", dtype=torch.float32).numpy()
 
         return audio
 
@@ -251,6 +272,9 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
     def sample_rate(self) -> int:
         # Always 24000 in practice, but let's not hardcode
         return self.mimi.config.sampling_rate
+
+    def downscaling_factor(self):
+        return int(self.sample_rate() / self.mimi.config._frame_rate)
 
 
 def audio_tokenizer_from_name(name: str):
