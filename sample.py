@@ -21,6 +21,7 @@ from tokenizer import (
     MuLawTokenizer,
     TiktokenTokenizer,
     Tokenizer,
+    audio_tokenizer_from_name,
 )
 
 # -----------------------------------------------------------------------------
@@ -99,10 +100,7 @@ if modality == "text":
     tokenizer = CharTokenizer(meta)
     # TODO: when to load GPT-2 tokenizer?
 elif modality == "audio":
-    if meta["tokenizer"] == "mu-law-256":
-        tokenizer = MuLawTokenizer()
-    else:
-        tokenizer = CodecTokenizer(meta["tokenizer"], device=device)
+    tokenizer = audio_tokenizer_from_name(meta["tokenizer"])
 else:
     raise ValueError(f"Unknown modality: {modality}. Expected 'text' or 'audio'.")
 
@@ -110,15 +108,18 @@ else:
 if start.startswith("FILE:"):
     if modality == "text":
         with open(start[len("FILE:") :], "r", encoding="utf-8") as f:
-            start = f.read()
+            start_data = f.read()
     elif modality == "audio":
         # Read audio file using librosa
-        start, _ = librosa.load(start[len("FILE:") :], sr=meta["sample_rate"])
+        start_data, _ = librosa.load(start[len("FILE:") :], sr=meta["sample_rate"])
 else:
-    if start == "\n":
-        start = np.array([0.0])
+    if modality == "text":
+        start_data = start
+    elif modality == "audio":
+        assert start == "\n", "Specifying `start` as a literal doesn't work for audio"
+        start_data = np.array([0.0])
 
-start_ids = tokenizer.encode(start)
+start_ids = tokenizer.encode(start_data)
 assert start_ids.ndim == 1, f"Expected 1D result from encode(), got {start_ids.shape=}"
 x = torch.tensor(start_ids, dtype=torch.long, device=device)
 x = x.repeat(num_samples, 1)
@@ -148,3 +149,20 @@ with torch.no_grad():
                 output_path = samples_dir / f"{file_prefix}_{k}.wav"
                 sf.write(output_path, audio, meta["sample_rate"])
                 print(f"Generated {output_path}")
+
+        # Make JSON file with sampling metadata
+        with open(
+            samples_dir / f"{file_prefix}_metadata.json", "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "sample_rate": meta["sample_rate"],
+                    "num_samples": num_samples,
+                    "temperature": temperature,
+                    "top_k": top_k,
+                    "start": start,
+                    "max_new_tokens": max_new_tokens,
+                },
+                f,
+                indent=2,
+            )
