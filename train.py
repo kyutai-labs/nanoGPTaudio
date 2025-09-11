@@ -85,6 +85,8 @@ config_keys = [
     if not k.startswith("_") and isinstance(v, (int, float, bool, str))
 ]
 exec(open("configurator.py").read())  # overrides from command line or config file
+lr_decay_iters = max_iters  # make sure these are always equal
+
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 

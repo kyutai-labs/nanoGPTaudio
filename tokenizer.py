@@ -117,6 +117,9 @@ class MuLawTokenizer(Tokenizer[np.ndarray]):
     def sample_rate(self) -> int:
         return 16000
 
+    def __str__(self):
+        return self.name()
+
 
 class CodecTokenizer(Tokenizer[np.ndarray]):
     def __init__(self, name: str, device: str = "cuda"):

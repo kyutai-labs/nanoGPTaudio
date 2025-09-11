@@ -2,6 +2,7 @@ import argparse
 import json
 import multiprocessing
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,18 +87,23 @@ def main(librilight_dir: Path, target_hours: float):
     print("Computing audio file durations")
     n_files_scanned = 1
     while n_files_scanned < len(paths):
+        n_files_scanned = min(n_files_scanned * 2, len(paths))
+
+        t1 = time.time()
         new_dataset_files = get_metadata(dataset_files[:n_files_scanned])
         for i in range(n_files_scanned):
             dataset_files[i] = new_dataset_files[i]
+        t2 = time.time()
 
         total_duration_s = sum([f.duration for f in dataset_files[:n_files_scanned]])
         total_duration_h = total_duration_s / 60 / 60
-        print(f"First {n_files_scanned:>7} files: {total_duration_h:>7.1f}h")
+        print(
+            f"First {n_files_scanned:>7} files: {total_duration_h:>7.1f}h. "
+            f"Took {t2 - t1:>7.0f}s to process"
+        )
 
         if total_duration_h >= target_hours:
             break
-
-        n_files_scanned *= 2
 
     total_duration_h = 0
     n_files_to_take = 0
@@ -105,6 +111,8 @@ def main(librilight_dir: Path, target_hours: float):
         total_duration_h += dataset_files[n_files_to_take].duration / 60 / 60
         if total_duration_h >= target_hours:
             break
+
+    print(f"Actual total duration: {total_duration_h}h")
 
     output_filename = f"librilight_{int(target_hours)}h.jsonl"
     output_path = Path(__file__).parent / output_filename
