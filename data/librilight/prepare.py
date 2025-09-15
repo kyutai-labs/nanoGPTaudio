@@ -65,7 +65,7 @@ def ask_if_overwriting(output_file: Path, min_size_gb: int):
     if not output_file.exists():
         return
 
-    file_size_gb = output_file.stat().st_size
+    file_size_gb = output_file.stat().st_size / (1024**3)
     if file_size_gb < min_size_gb:
         return
 

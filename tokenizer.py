@@ -97,7 +97,9 @@ class TiktokenTokenizer(Tokenizer[str]):
 
 class MuLawTokenizer(Tokenizer[np.ndarray]):
     def encode(self, raw: np.ndarray) -> torch.Tensor:
-        return torch.tensor(librosa.mu_compress(raw, mu=255) + 128).to(torch.uint8)
+        return torch.tensor(librosa.mu_compress(raw.clip(-1, 1), mu=255) + 128).to(
+            torch.uint8
+        )
 
     def decode(self, tokens: torch.Tensor) -> np.ndarray:
         return librosa.mu_expand(
