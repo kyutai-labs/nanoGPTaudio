@@ -12,7 +12,7 @@ wandb_log = True  # override via command line if you like
 wandb_project = "vaclav-nanogpt-audio"
 wandb_run_name = out_dir.split("/")[-1]
 
-dataset = "librilight/librilight_10000h_codec_0818_174908_8_rvq"
+dataset = "librilight/librilight_1000h_mu-law-256"
 gradient_accumulation_steps = 8
 block_size = 2048  # context size
 
