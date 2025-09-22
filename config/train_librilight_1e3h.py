@@ -27,7 +27,7 @@ dropout = 0.1  # for pretraining 0 is good, for finetuning try 0.1+
 batch_size = 64
 
 # with baby networks can afford to go a bit higher: 1e-3
-learning_rate = 6e-4
+learning_rate = 1e-4 # 6e-4 for codecs
 max_iters = 1_000_000 # AudioLM uses 1M, GPT-2 600k
 min_lr = learning_rate / 10  # learning_rate / 10 usually
 beta2 = 0.95
