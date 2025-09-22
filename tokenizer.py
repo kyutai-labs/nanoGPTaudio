@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Generic, Protocol, TypeVar, cast
 
@@ -202,9 +203,39 @@ class CodecTokenizer(Tokenizer[np.ndarray]):
 
 
 class MimiTokenizer(Tokenizer[np.ndarray]):
-    def __init__(self, device: str = "cuda"):
+    def __init__(
+        self,
+        semantic: bool = True,
+        n_codebooks: int | None = None,
+        device: str = "cuda",
+    ):
+        self.semantic = semantic
+        self._n_codebooks = n_codebooks
         self.device = device
         self.mimi = MimiModel.from_pretrained("kyutai/mimi").to(device)
+
+        if n_codebooks:
+            max_codebooks = self.mimi.config.num_quantizers
+            if not self.semantic:
+                max_codebooks -= 1
+            assert 1 <= n_codebooks <= self.mimi.config.num_quantizers, (
+                f"levels must be between 1 and {self.mimi.config.num_quantizers}"
+            )
+
+    @staticmethod
+    def from_name(name: str, device: str = "cuda") -> "MimiTokenizer":
+        semantic = True
+        n_codebooks = None
+        # Match patterns like 'mimi', 'mimi_8_rvq', 'mimi_16_rvq_nosemantic'
+        pattern = r"^mimi(?:_(\d+)_rvq)?(?:_nosemantic)?$"
+        match = re.match(pattern, name)
+        if not match:
+            raise ValueError(f"Invalid MimiTokenizer name: {name}")
+        if match.group(1):
+            n_codebooks = int(match.group(1))
+        if name.endswith("nosemantic"):
+            semantic = False
+        return MimiTokenizer(semantic=semantic, n_codebooks=n_codebooks, device=device)
 
     def encode(self, raw: np.ndarray) -> torch.Tensor:
         audio = torch.Tensor(raw).to(self.device)
@@ -218,6 +249,12 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
         with torch.no_grad():
             codes = cast(torch.Tensor, self.mimi.encode(audio).audio_codes)
             codes = codes.to(dtype=torch.int32)
+
+            if not self.semantic:
+                codes = codes[:, 1:]
+
+            if self._n_codebooks:
+                codes = codes[:, : self._n_codebooks]
 
             # To avoid having to model multiple streams, flatten the levels of the RVQ
             flat_codes = rearrange(codes, "b n_codebooks t -> b (t n_codebooks)")
@@ -256,6 +293,13 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
         codes = rearrange(
             tokens, "(t n_codebooks) -> n_codebooks t", n_codebooks=self.n_codebooks()
         )
+        if not self.semantic:
+            # Prepend zeroes for the semantic codes
+            zero_semantic = torch.zeros(
+                (1, codes.shape[1]), dtype=codes.dtype, device=codes.device
+            )
+            codes = torch.cat([zero_semantic, codes], dim=0)
+
         decoded = self.mimi.decode(codes[None, :, :]).audio_values
 
         audio = decoded[0, 0].detach().to("cpu", dtype=torch.float32).numpy()
@@ -269,10 +313,20 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
         return torch.int32
 
     def __str__(self):
-        return "mimi"
+        name = "mimi"
+        if self._n_codebooks:
+            name += f"_{self._n_codebooks}_rvq"
+        if not self.semantic:
+            name += "_nosemantic"
+        return name
 
     def n_codebooks(self):
-        return self.mimi.config.num_quantizers
+        if self._n_codebooks:
+            return self._n_codebooks
+        elif self.semantic:
+            return self.mimi.config.num_quantizers
+        else:
+            return self.mimi.config.num_quantizers - 1
 
     def sample_rate(self) -> int:
         # Always 24000 in practice, but let's not hardcode
@@ -285,8 +339,8 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
 def audio_tokenizer_from_name(name: str):
     if name.startswith("codec"):
         return CodecTokenizer(name)
-    elif name == "mimi":
-        return MimiTokenizer()
+    elif name.startswith("mimi"):
+        return MimiTokenizer.from_name(name)
     elif name == "mu-law-256":
         return MuLawTokenizer()
     else:
