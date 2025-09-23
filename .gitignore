@@ -18,3 +18,7 @@ wandb/
 models/
 meta.json
 librilight*.jsonl
+
+data/nsynth/
+data/mnist/
+data/fashion_mnist/

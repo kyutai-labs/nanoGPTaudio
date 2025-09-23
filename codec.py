@@ -259,6 +259,18 @@ class VectorQuantizer(nn.Module):
     def get_fraction_unused_codes(self, threshold: float = 1):
         return torch.mean((self.code_usage < threshold).float()).item()
 
+    def restart_unused_codes(self, batch: torch.Tensor):
+        value, index = self.code_usage.min(dim=0)
+        if value < 0.1:
+            new_usage = 1.0
+            self.code_usage[index] = (
+                new_usage  # Fake value, to make sure it's not restarted again
+            )
+            self.code_embedding_sum[index] = (
+                batch[torch.randint(0, len(batch), (1,))] * new_usage
+            )
+            print(f"Restarting {index}")
+
 
 class ResidualVectorQuantizer(nn.Module):
     def __init__(
