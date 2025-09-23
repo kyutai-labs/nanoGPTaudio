@@ -260,6 +260,10 @@ class VectorQuantizer(nn.Module):
         return torch.mean((self.code_usage < threshold).float()).item()
 
     def restart_unused_codes(self, batch: torch.Tensor):
+        """Restart a codebook entry that is used very little, if there is one.
+
+        Returns True if a code was restarted, False otherwise.
+        """
         value, index = self.code_usage.min(dim=0)
         if value < 0.1:
             new_usage = 1.0
@@ -269,7 +273,9 @@ class VectorQuantizer(nn.Module):
             self.code_embedding_sum[index] = (
                 batch[torch.randint(0, len(batch), (1,))] * new_usage
             )
-            print(f"Restarting {index}")
+            return True
+
+        return False
 
 
 class ResidualVectorQuantizer(nn.Module):
