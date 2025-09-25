@@ -266,10 +266,9 @@ class VectorQuantizer(nn.Module):
         """
         value, index = self.code_usage.min(dim=0)
         if value < 0.1:
+            # Increase the usage value to make sure it's not restarted immediately again
             new_usage = 1.0
-            self.code_usage[index] = (
-                new_usage  # Fake value, to make sure it's not restarted again
-            )
+            self.code_usage[index] = new_usage
             self.code_embedding_sum[index] = (
                 batch[torch.randint(0, len(batch), (1,))] * new_usage
             )
@@ -346,6 +345,17 @@ class ResidualVectorQuantizer(nn.Module):
         fractions = [b.get_fraction_unused_codes() for b in self.bottlenecks]
         return sum(fractions) / len(fractions)
 
+    def restart_unused_codes(self, batch: torch.Tensor):
+        """Restart codebook entries that are used very little, if there are any.
+
+        Returns the number of codebooks that were restarted.
+        """
+        n_restarted = 0
+        for b in self.bottlenecks:
+            if b.restart_unused_codes(batch):
+                n_restarted += 1
+        return n_restarted
+
 
 class MultiscaleSpectrogramLoss(nn.Module):
     def __init__(self):
@@ -382,6 +392,7 @@ class CodecConfig:
     n_codebooks: int
     spectral_loss_weight: float
     commitment_loss_weight: float
+    restart_unused_codes: bool = False
 
 
 class Codec(nn.Module):
@@ -433,6 +444,9 @@ class Codec(nn.Module):
         embeddings = self.encoder(audio)
 
         flat_embeddings = rearrange(embeddings, "b c t -> (b t) c")
+
+        if self.config.restart_unused_codes and self.training:
+            self.bottleneck.restart_unused_codes(flat_embeddings)
 
         codes_flat, flat_embeddings_q, commitment_loss = self.bottleneck(
             flat_embeddings

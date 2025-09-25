@@ -25,12 +25,12 @@ audio_sample_iters = 3
 always_save_checkpoint = False  # if True, always save a checkpoint after each eval
 
 # wandb logging
-wandb_log = True  # disabled by default
+wandb_log = True
 wandb_project = "vaclav-nanogpt-audio-codec"
 wandb_run_name = out_dir.split("/")[-1]
 
 # data
-dataset = "expresso"
+dataset = "librilight/librilight_1000h_mu-law-256"
 batch_size = 128
 block_size = 2 ** (14 + 2)  # 2**14 is roughly 1s of audio
 sample_rate = 16000
@@ -42,6 +42,7 @@ spectral_loss_weight = 1.0
 codebook_size = 1024
 n_codebooks = 8
 commitment_loss_weight = 0.02
+restart_unused_codes = False
 
 # adamw optimizer
 learning_rate = 3e-4  # Jukebox: 3e-4
@@ -146,6 +147,7 @@ codec_config = CodecConfig(
     n_codebooks=n_codebooks,
     spectral_loss_weight=spectral_loss_weight,
     commitment_loss_weight=commitment_loss_weight,
+    restart_unused_codes=restart_unused_codes,
 )
 
 model: Codec = Codec(codec_config)
@@ -292,7 +294,7 @@ while True:
                 wandb.save(os.path.join(out_dir, "codec_ckpt.pt"))
 
     with ctx:
-        reconstructed, losses = model(x)
+        _codes, reconstructed, losses = model(x)
     # immediately async prefetch next batch while model is doing the forward pass on the GPU
     x = get_batch("train")
     # backward pass, with gradient scaling if training in fp16
