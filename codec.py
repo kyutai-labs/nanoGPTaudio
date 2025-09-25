@@ -284,6 +284,7 @@ class ResidualVectorQuantizer(nn.Module):
         channels: int,
         codebook_size: int,
         n_codebooks: int,
+        codebook_update_speed: float = 0.01,
     ):
         super().__init__()
 
@@ -296,6 +297,7 @@ class ResidualVectorQuantizer(nn.Module):
                 VectorQuantizer(
                     channels=channels,
                     codebook_size=codebook_size,
+                    codebook_update_speed=codebook_update_speed,
                 )
                 for _ in range(n_codebooks)
             ]
