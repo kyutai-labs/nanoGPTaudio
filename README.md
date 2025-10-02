@@ -222,6 +222,8 @@ For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
 
 [![](https://dcbadge.vercel.app/api/server/3zy8kqD9Cp?compact=true&style=flat)](https://discord.gg/3zy8kqD9Cp)
 
-## acknowledgements
+## Sample sources:
 
-All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
+```
+ffmpeg -i /lustre/scwpod02/client/kyutai/datasets/librilight_segmented/train/10038/10066/july_field_dcc_64kb_0000.flac -ss 00:00:09.6 -t 4s prompt_librilight_uk_4s.wav
+```

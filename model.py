@@ -7,14 +7,15 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-import math
 import inspect
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 import tqdm
+from einops import rearrange
+from torch.nn import functional as F
 
 
 class LayerNorm(nn.Module):
@@ -140,10 +141,11 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    token_depth_weights: list[float] = field(default_factory=lambda: [1.0])
 
 
 class GPT(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: GPTConfig):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -175,6 +177,12 @@ class GPT(nn.Module):
                 torch.nn.init.normal_(
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
+
+        self.token_depth_weights = torch.Tensor(config.token_depth_weights)
+        self.token_depth_weights = self.token_depth_weights.repeat(
+            config.block_size // len(self.token_depth_weights)
+        )
+        assert self.token_depth_weights.shape == (config.block_size,)
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -217,10 +225,16 @@ class GPT(nn.Module):
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
+            # [batch, time, token index]
             logits = self.lm_head(x)
             loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+                rearrange(logits, "batch time token -> batch token time"),
+                targets,
+                ignore_index=-1,
+                reduction="none",
             )
+            loss *= self.token_depth_weights[None, :].to(device)
+            loss = loss.mean()
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(

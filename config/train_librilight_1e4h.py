@@ -12,7 +12,18 @@ wandb_log = True  # override via command line if you like
 wandb_project = "vaclav-nanogpt-audio"
 wandb_run_name = out_dir.split("/")[-1]
 
-dataset = "librilight/librilight_1000h_mu-law-256"
+dataset = "librilight/librilight_10000h_mimi_8_rvq"
+token_depth_weights = [
+    10.0,
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+]
+
 gradient_accumulation_steps = 8
 block_size = 2048  # context size
 
@@ -27,7 +38,7 @@ dropout = 0.1  # for pretraining 0 is good, for finetuning try 0.1+
 batch_size = 64
 
 # with baby networks can afford to go a bit higher: 1e-3
-learning_rate = 1e-4 # 6e-4 for codecs
-max_iters = 1_000_000 # AudioLM uses 1M, GPT-2 600k
+learning_rate = 1e-4  # 6e-4 for codecs
+max_iters = 1_000_000  # AudioLM uses 1M, GPT-2 600k
 min_lr = learning_rate / 10  # learning_rate / 10 usually
 beta2 = 0.95

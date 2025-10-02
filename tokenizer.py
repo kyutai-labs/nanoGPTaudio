@@ -336,11 +336,11 @@ class MimiTokenizer(Tokenizer[np.ndarray]):
         return int(self.sample_rate() / self.mimi.config._frame_rate)
 
 
-def audio_tokenizer_from_name(name: str):
+def audio_tokenizer_from_name(name: str, device: str = "cuda"):
     if name.startswith("codec"):
-        return CodecTokenizer(name)
+        return CodecTokenizer(name, device=device)
     elif name.startswith("mimi"):
-        return MimiTokenizer.from_name(name)
+        return MimiTokenizer.from_name(name, device=device)
     elif name == "mu-law-256":
         return MuLawTokenizer()
     else:

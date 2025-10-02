@@ -61,6 +61,9 @@ weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
+# When using multiple tokens per timestep (RVQ), you can use this to assign different
+# loss weights to each token
+token_depth_weights = [1.]
 # learning rate decay settings
 decay_lr = True  # whether to decay the learning rate
 warmup_iters = 2000  # how many steps to warm up for
@@ -155,7 +158,14 @@ def get_batch(split):
         mode="r",
     )
 
-    ix = torch.randint(len(data) - block_size, (batch_size,))
+    tokens_per_timestep = meta.get("tokens_per_timestep", 1)
+    assert len(token_depth_weights) == tokens_per_timestep
+    ix = (
+        torch.randint(len(data) - block_size, (batch_size,))
+        # Be sure to sample at timestep boundaries
+        // tokens_per_timestep
+        * tokens_per_timestep
+    )
     x = torch.stack(
         [torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix]
     )
@@ -189,6 +199,7 @@ model_args = dict(
     bias=bias,
     vocab_size=None,
     dropout=dropout,
+    token_depth_weights=token_depth_weights,
 )  # start with model_args from command line
 if init_from == "scratch":
     # init a new model from scratch

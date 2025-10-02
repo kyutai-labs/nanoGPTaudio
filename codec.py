@@ -361,6 +361,8 @@ class MultiscaleSpectrogramLoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.spectrograms = nn.ModuleList(
+            # Hyperparams come from Jukebox:
+            # https://github.com/openai/jukebox/blob/08efbbc1d4ed1a3cef96e08a931944c8b4d63bb3/jukebox/hparams.py#L560-L562
             [
                 torchaudio.transforms.Spectrogram(
                     n_fft=2048, hop_length=240, win_length=1200, power=1
