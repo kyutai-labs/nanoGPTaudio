@@ -9,6 +9,7 @@ import PIL.Image
 import PIL.ImageOps
 import tqdm.auto
 from einops import rearrange
+from IPython.display import Video
 
 
 class HistoryStep(TypedDict):
@@ -47,9 +48,13 @@ def paste_image_on_canvas(
 
 
 def image_for_history_step(
-    history_step: HistoryStep, bounds: tuple[int, int, int, int] | None = None
+    history_step: HistoryStep,
+    bounds: tuple[int, int, int, int] | None = None,
+    level: int = 0,
+    show_quantization: bool = True,
 ):
-    samples = history_step["samples"].copy()
+    samples = history_step["samples" if level == 0 else "residuals"].copy()
+    # samples[:, 1] = -samples[:, 1]
 
     x_reconstructed = history_step["x_reconstructed"]
     images = np.clip(rearrange(x_reconstructed, "b (h w) -> b h w", h=28, w=28), 0, 1)
@@ -61,7 +66,7 @@ def image_for_history_step(
         min_x, min_y, max_x, max_y = bounds
 
     canvas_size = 768
-    canvas = PIL.Image.new("RGB", (canvas_size, canvas_size), 0)
+    canvas = PIL.Image.new("RGB", (canvas_size, canvas_size), 0)  # 18
 
     # Define a list of colors for tinting (RGB tuples)
     colors = [
@@ -70,7 +75,7 @@ def image_for_history_step(
         (157, 153, 183),
     ]
 
-    for img_data, label, sample in zip(images, history_step["labels"], samples):
+    for img_data, label, position in zip(images, history_step["labels"], samples):
         assert img_data.dtype == np.float32
         img_data = (img_data * 255).astype(np.uint8)
 
@@ -84,37 +89,42 @@ def image_for_history_step(
         )
 
         # Paste tinted image onto canvas at normalized position
-        paste_image_on_canvas(canvas, img, sample, (min_x, min_y), (max_x, max_y))
+        paste_image_on_canvas(canvas, img, position, (min_x, min_y), (max_x, max_y))
 
-    codebook_images = np.clip(
-        rearrange(
+    if show_quantization:
+        codebook_images = rearrange(
             history_step["codebooks_reconstructed"], "b (h w) -> b h w", h=28, w=28
-        ),
-        0,
-        1,
-    )
-
-    for img_data, sample in zip(codebook_images, history_step["codebooks"][0]):
-        assert img_data.dtype == np.float32
-        img_data = (img_data * 255).astype(np.uint8)
-
-        img = PIL.Image.fromarray(img_data, mode="L").convert("RGB")
-        # Scale 2x
-        img = img.resize(
-            (
-                int(img.width * 1.5),
-                int(img.height * 1.5),
-            ),
         )
-        # Add a 1px white border
-        img = PIL.ImageOps.expand(img, border=1, fill="white")
+        codebook_images = np.clip(codebook_images, 0, 1)
 
-        paste_image_on_canvas(canvas, img, sample, (min_x, min_y), (max_x, max_y))
+        for img_data, position in zip(
+            codebook_images, history_step["codebooks"][level].copy()
+        ):
+            # position[1] = -position[1]
+            assert img_data.dtype == np.float32
+            img_data = (img_data * 255).astype(np.uint8)
+
+            img = PIL.Image.fromarray(img_data, mode="L").convert("RGB")
+            img = img.resize(
+                (
+                    int(img.width * 1.5),
+                    int(img.height * 1.5),
+                ),
+            )
+            img = PIL.ImageOps.expand(img, border=1, fill="white")
+
+            paste_image_on_canvas(canvas, img, position, (min_x, min_y), (max_x, max_y))
 
     return canvas
 
 
-def export_history_to_mp4(history, output_path="history_steps.mp4", framerate=30):
+def export_history_to_mp4(
+    history,
+    output_path="history_steps.mp4",
+    level=0,
+    framerate=30,
+    show_quantization=True,
+):
     """
     Generates a PIL image for every history step and exports them as an MP4 using ffmpeg.
     """
@@ -132,7 +142,9 @@ def export_history_to_mp4(history, output_path="history_steps.mp4", framerate=30
             ]
             bounds = tuple(updated)
 
-            img = image_for_history_step(step, bounds)
+            img = image_for_history_step(
+                step, bounds=bounds, level=level, show_quantization=show_quantization
+            )
             img.save(os.path.join(tmpdir, f"frame_{i:04d}.png"))
 
         subprocess.run(
@@ -152,4 +164,4 @@ def export_history_to_mp4(history, output_path="history_steps.mp4", framerate=30
             check=True,
         )
     # The video is now saved at output_path
-    return output_path
+    return Video(output_path)
