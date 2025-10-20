@@ -13,16 +13,17 @@ wandb_project = "vaclav-nanogpt-audio"
 wandb_run_name = out_dir.split("/")[-1]
 
 dataset = "librilight/librilight_10000h_mimi_8_rvq"
-token_depth_weights = [
-    10.0,
-    0.1,
-    0.1,
-    0.1,
-    0.1,
-    0.1,
-    0.1,
-    0.1,
-]
+# Uncomment to weigh the semantic token higher:
+# token_depth_weights = [
+#     10.0,
+#     0.1,
+#     0.1,
+#     0.1,
+#     0.1,
+#     0.1,
+#     0.1,
+#     0.1,
+# ]
 
 gradient_accumulation_steps = 8
 block_size = 2048  # context size

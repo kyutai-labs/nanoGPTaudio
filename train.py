@@ -80,7 +80,7 @@ dtype = (
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     else "float16"
 )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True  # use PyTorch 2.0 to compile the model to be faster
+compile = False  # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [
     k

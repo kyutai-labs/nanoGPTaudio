@@ -42,7 +42,7 @@ spectral_loss_weight = 1.0
 codebook_size = 1024
 n_codebooks = 8
 commitment_loss_weight = 0.02
-restart_unused_codes = False
+restart_unused_codes = True
 
 # adamw optimizer
 learning_rate = 3e-4  # Jukebox: 3e-4
@@ -63,7 +63,9 @@ dtype = (
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     else "float16"
 )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True  # use PyTorch 2.0 to compile the model to be faster
+# Compiling should make the model faster, but I think currently there is something
+# broken, preventing the model from being compiled (or maybe it just runs slow)
+compile = False
 # -----------------------------------------------------------------------------
 
 config_keys = [
