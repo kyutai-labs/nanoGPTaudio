@@ -12,3 +12,6 @@ dependencies = [
 [tool.pyright]
 typeCheckingMode = "standard"
 pythonVersion = "3.12"
+
+[tool.uv]
+exclude-newer = "7 days"
